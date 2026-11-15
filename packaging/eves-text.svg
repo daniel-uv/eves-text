@@ -26,8 +26,7 @@
   <path d="M90 10 V22 a4 4 0 0 0 4 4 H106 Z"
         fill="url(#fold)" stroke="#bcc7d3" stroke-width="2" stroke-linejoin="round"/>
 
-  <!-- Буква E: округлые концы штрихов -->
-  <path d="M86 40 H44 V90 H86 M44 65 H78"
-        fill="none" stroke="url(#ink)" stroke-width="12"
-        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Буква E: острые углы, все полоски одинаковой длины -->
+  <path d="M43 34 H87 V46 H55 V58 H87 V70 H55 V82 H87 V94 H43 Z"
+        fill="url(#ink)"/>
 </svg>
