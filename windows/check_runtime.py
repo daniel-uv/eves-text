@@ -149,6 +149,39 @@ def main() -> int:
 
     results.append(check("шрифт", font))
 
+    def loaders():
+        import gi
+
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf
+
+        base = launcher.base_dir()
+        loaders_dir = base / "lib" / "gdk-pixbuf-2.0" / "2.10.0" / "loaders"
+        svg = loaders_dir / "pixbufloader_svg.dll"
+        exe = base / "bin" / "gdk-pixbuf-query-loaders.exe"
+        formats = sorted({item.get_name() for item in GdkPixbuf.Pixbuf.get_formats()})
+        if "svg" in formats:
+            return f"svg есть, форматов: {len(formats)}"
+        detail = f"svg-загрузчик: {svg.is_file()}, форматов: {len(formats)}"
+        if exe.is_file() and svg.is_file():
+            import subprocess
+
+            result = subprocess.run(
+                [str(exe), str(svg)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            detail += (
+                f"; query-loaders: код {result.returncode}, "
+                f"stderr: {(result.stderr or '').strip()[:400]!r}"
+            )
+        raise RuntimeError(detail)
+
+    results.append(check("загрузчики gdk-pixbuf", loaders))
+
     def icon():
         import gi
 
@@ -156,11 +189,19 @@ def main() -> int:
         gi.require_version("GdkPixbuf", "2.0")
         from gi.repository import GdkPixbuf, Gtk
 
+        base = launcher.base_dir()
+        data_dir = Path(os.environ["EVES_TEXT_DATA_DIR"])
+        icons = data_dir / "icons"
+        loaders = base / "lib" / "gdk-pixbuf-2.0" / "2.10.0" / "loaders"
+        cache = os.environ.get("GDK_PIXBUF_MODULE_FILE", "не задан")
+        loader_names = (
+            sorted(item.name for item in loaders.iterdir()) if loaders.is_dir() else []
+        )
+        format_names = {item.get_name() for item in GdkPixbuf.Pixbuf.get_formats()}
+
         theme = Gtk.IconTheme.get_default()
         if theme is None:
             raise RuntimeError("тема иконок не создана")
-        data_dir = Path(os.environ["EVES_TEXT_DATA_DIR"])
-        icons = data_dir / "icons"
         if icons.is_dir():
             theme.append_search_path(str(icons))
 
@@ -168,20 +209,33 @@ def main() -> int:
         theme_name = (
             settings.get_property("gtk-icon-theme-name") if settings else "?"
         )
-        formats = ", ".join(
-            sorted({item.get_name() for item in GdkPixbuf.Pixbuf.get_formats()})
+        png = icons / "hicolor" / "16x16" / "apps" / "eves-text.png"
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(png))
+            png_state = f"{pixbuf.get_width()}x{pixbuf.get_height()}"
+        except Exception as exc:  # noqa: BLE001
+            png_state = f"не загружается ({exc})"
+
+        # Отдельный экземпляр темы только с hicolor: показывает, видит ли GTK
+        # наши PNG, когда наследование Adwaita не участвует.
+        hicolor = Gtk.IconTheme.new()
+        hicolor.set_custom_theme("hicolor")
+
+        details = (
+            f"тема {theme_name}, размеры eves-text: {theme.get_icon_sizes('eves-text')}, "
+            f"в списке значков: {'eves-text' in theme.list_icons('Applications')}, "
+            f"hicolor в отдельной теме: {hicolor.has_icon('eves-text')}, "
+            f"AdwaitaLegacy: {(icons / 'AdwaitaLegacy').is_dir()}, "
+            f"index.theme: {(icons / 'hicolor' / 'index.theme').is_file()}, "
+            f"PNG: {png_state}, document-new: {theme.has_icon('document-new')}, "
+            f"svg: {'svg' in format_names}, форматы: {', '.join(sorted(format_names))}, "
+            f"кэш: {cache}, загрузчики: {', '.join(loader_names)}"
         )
-        cache = os.environ.get("GDK_PIXBUF_MODULE_FILE", "не задан")
         if not theme.has_icon("eves-text"):
-            icon_file = icons / "hicolor" / "scalable" / "apps" / "eves-text.svg"
-            info = GdkPixbuf.Pixbuf.get_file_info(str(icon_file))
-            raise RuntimeError(
-                f"иконка eves-text не найдена (тема {theme_name}, "
-                f"пути: {theme.get_search_path()}, "
-                f"файл: {icon_file} -> {info}, "
-                f"форматы: {formats}, кэш загрузчиков: {cache})"
-            )
+            raise RuntimeError(f"иконка eves-text не найдена ({details})")
         info = theme.lookup_icon("eves-text", 64, 0)
+        if info is None:
+            raise RuntimeError(f"lookup_icon вернул None ({details})")
         return info.get_filename() if info else "из темы"
 
     results.append(check("иконка", icon))

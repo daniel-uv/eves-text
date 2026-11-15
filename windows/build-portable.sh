@@ -82,6 +82,10 @@ mkdir -p "$DIST/share/icons"
 if [ -d "$PREFIX/share/icons/Adwaita" ]; then
     cp -a "$PREFIX/share/icons/Adwaita" "$DIST/share/icons/"
 fi
+# adwaita-icon-theme 51 — только index.theme; сами значки лежат в AdwaitaLegacy.
+if [ -d "$PREFIX/share/icons/AdwaitaLegacy" ]; then
+    cp -a "$PREFIX/share/icons/AdwaitaLegacy" "$DIST/share/icons/"
+fi
 if [ -d "$PREFIX/share/icons/hicolor" ]; then
     cp -a "$PREFIX/share/icons/hicolor" "$DIST/share/icons/"
 fi

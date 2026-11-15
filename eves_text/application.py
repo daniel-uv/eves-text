@@ -60,12 +60,17 @@ class Application(Gtk.Application):
 
         Gtk.Window.set_default_icon_name(app_icon_name())
         if theme is None or not theme.has_icon("eves-text"):
-            icon_file = Path(__file__).parent / "resources" / "eves-text.svg"
-            if icon_file.exists():
+            # PNG первым: на Windows в бандле может не быть SVG-загрузчика.
+            resources = Path(__file__).parent / "resources"
+            for name in ("eves-text.png", "eves-text.svg"):
+                icon_file = resources / name
+                if not icon_file.exists():
+                    continue
                 try:
                     Gtk.Window.set_default_icon_from_file(str(icon_file))
+                    break
                 except GLib.Error:
-                    pass
+                    continue
 
     @staticmethod
     def _apply_system_theme() -> None:

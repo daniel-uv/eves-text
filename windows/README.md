@@ -95,6 +95,7 @@ Eve's Text\
        mingw-w64-ucrt-x86_64-hunspell \
        mingw-w64-ucrt-x86_64-librsvg \
        mingw-w64-ucrt-x86_64-adwaita-icon-theme \
+       mingw-w64-ucrt-x86_64-adwaita-icon-theme-legacy \
        mingw-w64-ucrt-x86_64-hicolor-icon-theme \
        mingw-w64-ucrt-x86_64-fontconfig \
        mingw-w64-ucrt-x86_64-glib2

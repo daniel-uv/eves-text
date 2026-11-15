@@ -29,6 +29,7 @@ mkdir -p \
     "$PREFIX/bin" \
     "$PREFIX/share/applications" \
     "$PREFIX/share/icons/hicolor/scalable/apps" \
+    "$PREFIX/share/icons/hicolor/256x256/apps" \
     "$PREFIX/share/doc/$PKG"
 
 # --- код приложения
@@ -61,6 +62,8 @@ install -m644 eves_text/resources/eves-text.desktop \
     "$PREFIX/share/applications/$PKG.desktop"
 install -m644 eves_text/resources/eves-text.svg \
     "$PREFIX/share/icons/hicolor/scalable/apps/$PKG.svg"
+install -m644 eves_text/resources/eves-text.png \
+    "$PREFIX/share/icons/hicolor/256x256/apps/$PKG.png"
 install -m644 packaging/copyright "$PREFIX/share/doc/$PKG/copyright"
 
 {
@@ -120,6 +123,7 @@ if [ "${SKIP_TEST:-0}" != "1" ]; then
     test -x "$TMP/usr/bin/$PKG"
     test -f "$TMP/usr/share/applications/$PKG.desktop"
     test -f "$TMP/usr/share/icons/hicolor/scalable/apps/$PKG.svg"
+    test -f "$TMP/usr/share/icons/hicolor/256x256/apps/$PKG.png"
     echo "    структура пакета в порядке"
 fi
 
