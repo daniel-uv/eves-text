@@ -71,7 +71,15 @@ def main() -> int:
         gi.require_version("GtkSource", "4")
         from gi.repository import GtkSource
 
-        return f"{GtkSource.MAJOR_VERSION}.{GtkSource.MINOR_VERSION}.{GtkSource.MICRO_VERSION}"
+        manager = GtkSource.LanguageManager.get_default()
+        if manager is None:
+            raise RuntimeError("менеджер языков не создан")
+        languages = manager.get_language_ids()
+        if len(languages) < 10:
+            raise RuntimeError(
+                "мало языков подсветки — не найден share/gtksourceview-4"
+            )
+        return f"языков подсветки: {len(languages)}"
 
     results.append(check("GtkSourceView", gtk_source))
 
@@ -145,7 +153,8 @@ def main() -> int:
         import gi
 
         gi.require_version("Gtk", "3.0")
-        from gi.repository import Gtk
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf, Gtk
 
         theme = Gtk.IconTheme.get_default()
         if theme is None:
@@ -154,8 +163,24 @@ def main() -> int:
         icons = data_dir / "icons"
         if icons.is_dir():
             theme.append_search_path(str(icons))
+
+        settings = Gtk.Settings.get_default()
+        theme_name = (
+            settings.get_property("gtk-icon-theme-name") if settings else "?"
+        )
+        formats = ", ".join(
+            sorted({item.get_name() for item in GdkPixbuf.Pixbuf.get_formats()})
+        )
+        cache = os.environ.get("GDK_PIXBUF_MODULE_FILE", "не задан")
         if not theme.has_icon("eves-text"):
-            raise RuntimeError("иконка eves-text не найдена")
+            icon_file = icons / "hicolor" / "scalable" / "apps" / "eves-text.svg"
+            info = GdkPixbuf.Pixbuf.get_file_info(str(icon_file))
+            raise RuntimeError(
+                f"иконка eves-text не найдена (тема {theme_name}, "
+                f"пути: {theme.get_search_path()}, "
+                f"файл: {icon_file} -> {info}, "
+                f"форматы: {formats}, кэш загрузчиков: {cache})"
+            )
         info = theme.lookup_icon("eves-text", 64, 0)
         return info.get_filename() if info else "из темы"
 

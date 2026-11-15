@@ -88,6 +88,10 @@ fi
 mkdir -p "$DIST/share/icons/hicolor/scalable/apps"
 cp "$ROOT/eves_text/resources/eves-text.svg" \
    "$DIST/share/icons/hicolor/scalable/apps/eves-text.svg"
+# PNG-копии нужны на случай, если SVG-загрузчик gdk-pixbuf не подхватился.
+if [ -d "$ROOT/windows/assets/icons/hicolor" ]; then
+    cp -a "$ROOT/windows/assets/icons/hicolor/." "$DIST/share/icons/hicolor/"
+fi
 
 if [ -d "$PREFIX/share/locale" ]; then
     cp -a "$PREFIX/share/locale" "$DIST/share/"
