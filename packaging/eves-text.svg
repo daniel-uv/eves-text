@@ -8,21 +8,26 @@
       <stop offset="0" stop-color="#eef2f7"/>
       <stop offset="1" stop-color="#d9e1ea"/>
     </linearGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e0524a"/>
+      <stop offset="1" stop-color="#c22b25"/>
+    </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="0" dy="3" stdDeviation="3.5" flood-color="#1d2733" flood-opacity="0.28"/>
     </filter>
   </defs>
 
-  <!-- Лист -->
-  <path d="M30 10 H82 L106 34 V112 a6 6 0 0 1 -6 6 H30 a6 6 0 0 1 -6 -6 V16 a6 6 0 0 1 6 -6 Z"
+  <!-- Лист с маленьким срезанным уголком -->
+  <path d="M30 10 H90 L106 26 V112 a6 6 0 0 1 -6 6 H30 a6 6 0 0 1 -6 -6 V16 a6 6 0 0 1 6 -6 Z"
         fill="url(#page)" stroke="#bcc7d3" stroke-width="2" stroke-linejoin="round"
         filter="url(#shadow)"/>
 
   <!-- Загнутый уголок -->
-  <path d="M82 10 V28 a6 6 0 0 0 6 6 H106 Z"
+  <path d="M90 10 V22 a4 4 0 0 0 4 4 H106 Z"
         fill="url(#fold)" stroke="#bcc7d3" stroke-width="2" stroke-linejoin="round"/>
 
-  <!-- Буква E -->
-  <path d="M41 36 H89 V48 H56 V58 H83 V69 H56 V86 H89 V98 H41 Z"
-        fill="#2b3a4b"/>
+  <!-- Буква E: округлые концы штрихов -->
+  <path d="M86 40 H44 V90 H86 M44 65 H78"
+        fill="none" stroke="url(#ink)" stroke-width="12"
+        stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
