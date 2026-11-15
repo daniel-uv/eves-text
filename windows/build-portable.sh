@@ -64,7 +64,8 @@ rm -f "$DIST/lib/gtk-3.0/3.0.0/immodules.cache"
 mkdir -p "$DIST/share/glib-2.0"
 cp -a "$PREFIX/share/glib-2.0/schemas" "$DIST/share/glib-2.0/"
 if command -v glib-compile-schemas >/dev/null 2>&1; then
-    glib-compile-schemas "$DIST/share/glib-2.0/schemas"
+    # cd + "." — чтобы не зависеть от преобразования POSIX-путей в Windows.
+    ( cd "$DIST/share/glib-2.0/schemas" && glib-compile-schemas . )
 fi
 
 # Подсветка синтаксиса и стили GtkSourceView (oblivion/kate и т.д.).

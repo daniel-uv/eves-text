@@ -54,14 +54,14 @@ jobs:
         run: bash windows/build-portable.sh
 
       - name: Проверить рантайм
+        shell: pwsh
         run: |
-          "windows/dist/Eve's Text/bin/python.exe" \
-              "windows/dist/Eve's Text/app/check_runtime.py"
+          & "windows\dist\Eve's Text\bin\python.exe" "windows\dist\Eve's Text\app\check_runtime.py"
 
       - name: Проверить окно
+        shell: pwsh
         run: |
-          "windows/dist/Eve's Text/bin/python.exe" \
-              "windows/dist/Eve's Text/app/check_runtime.py" --gui
+          & "windows\dist\Eve's Text\bin\python.exe" "windows\dist\Eve's Text\app\check_runtime.py" --gui
 
       - name: Упаковать портативную версию
         shell: pwsh
