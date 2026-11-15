@@ -15,7 +15,7 @@ gi.require_version("GtkSource", "4")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, GtkSource, Pango  # noqa: E402
 
-from . import ai_check, document  # noqa: E402
+from . import __version__, ai_check, document, updates  # noqa: E402
 from . import settings as user_settings  # noqa: E402
 from .ollama_server import (  # noqa: E402
     ManagedOllama,
@@ -127,6 +127,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self._ai_pull_status = ""
         self._ai_pull_last_update = 0.0
         self._message_timeout = 0
+        self._update_busy = False
+        self._update_downloaded: Path | None = None
+        self._update_progress_time = 0.0
+        self._destroyed = False
 
         self.set_default_size(1000, 700)
         self._icon_name = app_icon_name()
@@ -369,6 +373,13 @@ class MainWindow(Gtk.ApplicationWindow):
         bar.pack_start(self.enc_label, False, False, 0)
         bar.pack_start(self.message_label, True, True, 0)
         bar.pack_end(self.counts_label, False, False, 0)
+
+        self.version_button = Gtk.Button(label="Версия актуальна")
+        self.version_button.set_relief(Gtk.ReliefStyle.NONE)
+        self.version_button.set_tooltip_text("Проверить обновления")
+        self.version_button.get_style_context().add_class("version-button")
+        self.version_button.connect("clicked", self.action_check_updates)
+        bar.pack_end(self.version_button, False, False, 0)
         return bar
 
     # -------------------------------------------------------------- actions
@@ -1392,6 +1403,175 @@ class MainWindow(Gtk.ApplicationWindow):
     def _show_ai_error(self, message: str) -> None:
         self._show_notice("Не удалось проверить текст", message)
 
+    # -------------------------------------------------------------- updates
+
+    def _set_update_label(self, text: str, tooltip: str | None = None) -> None:
+        if self._destroyed:
+            return
+        self.version_button.set_label(text)
+        self.version_button.set_tooltip_text(tooltip or "Проверить обновления")
+
+    def action_check_updates(self, *_args) -> None:
+        """Проверяет обновления; новую версию скачивает в «Загрузки»."""
+        if self._update_busy:
+            return
+        if self._update_downloaded is not None:
+            self._open_downloads_folder()
+            return
+        self._start_update_check()
+
+    def _start_update_check(self) -> None:
+        self._update_busy = True
+        self.version_button.set_sensitive(False)
+        self._set_update_label("Проверяю обновления…")
+        self._show_message("Проверяю обновления на GitHub…", seconds=0)
+        threading.Thread(
+            target=self._update_check_worker,
+            args=(__version__, updates.platform_kind()),
+            daemon=True,
+        ).start()
+
+    def _update_check_worker(self, current: str, kind: str) -> None:
+        try:
+            releases = updates.fetch_releases()
+            release = updates.select_release(releases, current, kind)
+        except updates.UpdateError as exc:
+            GLib.idle_add(self._update_failed, str(exc))
+            return
+        GLib.idle_add(self._update_checked, release, current)
+
+    def _update_checked(
+        self, release: updates.ReleaseInfo | None, current: str
+    ) -> None:
+        if self._destroyed:
+            return
+        self._update_busy = False
+        self.version_button.set_sensitive(True)
+        if release is None:
+            self._set_update_label("Версия актуальна")
+            self._show_message(f"У вас последняя версия {current}.")
+            return
+
+        self.version_button.set_sensitive(False)
+        self._update_busy = True
+        self._update_progress_time = 0.0
+        self._set_update_label(f"Скачиваю {release.version}… 0%")
+        self._show_message(
+            f"Доступна версия {release.version}, скачиваю…", seconds=0
+        )
+        try:
+            destination = self._downloads_dir() / release.asset_name
+        except OSError as exc:
+            self._update_failed(f"Не удалось создать папку загрузок: {exc}")
+            return
+        threading.Thread(
+            target=self._update_download_worker,
+            args=(release, destination),
+            daemon=True,
+        ).start()
+
+    def _downloads_dir(self) -> Path:
+        directory = GLib.get_user_special_dir(
+            GLib.UserDirectory.DIRECTORY_DOWNLOAD
+        )
+        path = Path(directory) if directory else Path.home() / "Downloads"
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            path = user_settings.config_dir() / "updates"
+            path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _update_download_worker(
+        self, release: updates.ReleaseInfo, destination: Path
+    ) -> None:
+        try:
+            updates.download_asset(
+                release.asset_url,
+                destination,
+                progress=lambda done, total: GLib.idle_add(
+                    self._update_download_progress,
+                    release.version,
+                    done,
+                    total,
+                ),
+            )
+        except updates.UpdateError as exc:
+            GLib.idle_add(self._update_failed, str(exc))
+            return
+        GLib.idle_add(self._update_downloaded_ok, release, destination)
+
+    def _update_download_progress(
+        self, version: str, done: int, total: int
+    ) -> bool:
+        if self._destroyed:
+            return False
+        now = time.monotonic()
+        if now - self._update_progress_time < 0.2 and (total <= 0 or done < total):
+            return False
+        self._update_progress_time = now
+        if total > 0:
+            percent = min(100, int(done * 100 / total))
+            self._set_update_label(f"Скачиваю {version}… {percent}%")
+            self._show_message(
+                f"Скачиваю версию {version}: {percent}%", seconds=0
+            )
+        else:
+            self._set_update_label(f"Скачиваю {version}…")
+            self._show_message(f"Скачиваю версию {version}…", seconds=0)
+        return False
+
+    def _update_downloaded_ok(
+        self, release: updates.ReleaseInfo, destination: Path
+    ) -> bool:
+        if self._destroyed:
+            return False
+        self._update_busy = False
+        self._update_downloaded = destination
+        self.version_button.set_sensitive(True)
+        self._set_update_label(
+            f"Скачана версия {release.version}",
+            "Открыть папку с загруженным обновлением",
+        )
+        if updates.platform_kind() == "windows":
+            hint = "Запустите скачанный установщик."
+        else:
+            hint = f"Установка: sudo dpkg -i «{destination}»."
+        self._show_message(
+            f"Версия {release.version} скачана: {destination}. {hint}",
+            seconds=20,
+        )
+        return False
+
+    def _update_failed(self, message: str) -> bool:
+        if self._destroyed:
+            return False
+        self._update_busy = False
+        self.version_button.set_sensitive(True)
+        self._set_update_label("Проверить обновления")
+        self._show_message("Не удалось проверить обновления", seconds=10)
+        self._show_notice("Обновление", message)
+        return False
+
+    def _open_downloads_folder(self) -> None:
+        path = self._update_downloaded
+        if path is None:
+            return
+        try:
+            opened = Gtk.show_uri_on_window(
+                self, path.parent.resolve().as_uri(), Gdk.CURRENT_TIME
+            )
+        except GLib.Error as exc:
+            self._show_notice(
+                "Обновление", f"Не удалось открыть папку:\n{exc.message}"
+            )
+            return
+        if not opened:
+            self._show_notice(
+                "Обновление",
+                f"Не удалось открыть папку в файловом менеджере:\n{path.parent}",
+            )
+
     # ---------------------------------------------------------------- theme
 
     def _apply_style_scheme(self) -> None:
@@ -1624,6 +1804,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_destroy(self, *_args) -> None:
         """Останавливает скачивание и отдельную службу при закрытии окна."""
+        self._destroyed = True
         if self._ai_pull_cancel is not None:
             self._ai_pull_cancel.set()
         self._managed_ollama.stop()
@@ -1636,8 +1817,6 @@ class MainWindow(Gtk.ApplicationWindow):
         Gtk.drag_finish(context, bool(path), False, time)
 
     def _on_about(self, *_args) -> None:
-        from . import __version__
-
         dialog = Gtk.AboutDialog(transient_for=self, modal=True)
         dialog.set_program_name(APP_NAME)
         dialog.set_version(__version__)

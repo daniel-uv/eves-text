@@ -28,6 +28,8 @@ Eve's Text — простой текстовый редактор для Linux �
   модель скачивается вручную: меню «ИИ» → «Скачать модель», там же выбирается
   папка для её хранения
 - Строка состояния: позиция курсора, кодировка, число слов и символов
+- Обновления: надпись «Версия актуальна» в правом нижнем углу — нажмите,
+  чтобы проверить и скачать новую версию
 - Открытие файла из терминала, drag & drop в окно
 - Сборка в `.deb` и установка в меню приложений со своей иконкой
 
@@ -49,8 +51,8 @@ python3 -m eves_text --version
 ## Сборка и установка .deb
 
 ```bash
-./packaging/build-deb.sh                 # -> dist/eves-text_0.6.5-1_all.deb
-sudo dpkg -i dist/eves-text_0.6.5-1_all.deb
+./packaging/build-deb.sh                 # -> dist/eves-text_0.6.6-1_all.deb
+sudo dpkg -i dist/eves-text_0.6.6-1_all.deb
 eves-text                                # или из меню «Eve's Text»
 ```
 
@@ -65,9 +67,9 @@ MAINTAINER="Имя <mail@example.org>" ./packaging/build-deb.sh
 Проверить пакет без установки:
 
 ```bash
-dpkg-deb --info dist/eves-text_0.6.5-1_all.deb
-dpkg-deb -c dist/eves-text_0.6.5-1_all.deb
-dpkg-deb -x dist/eves-text_0.6.5-1_all.deb /tmp/eves-text-root
+dpkg-deb --info dist/eves-text_0.6.6-1_all.deb
+dpkg-deb -c dist/eves-text_0.6.6-1_all.deb
+dpkg-deb -x dist/eves-text_0.6.6-1_all.deb /tmp/eves-text-root
 /tmp/eves-text-root/usr/lib/eves-text/eves-text --version
 ```
 
@@ -125,6 +127,7 @@ eves-text/
 │   ├── ai_check.py            проверка текста через Ollama (без GTK)
 │   ├── ollama_server.py       отдельная служба Ollama с выбранной папкой
 │   ├── settings.py            JSON-настройки модели и папки (без GTK)
+│   ├── updates.py             проверка релизов GitHub и скачивание (без GTK)
 │   ├── document.py            чтение/запись файлов и статистика (без GTK)
 │   └── resources/             style.css, eves-text.desktop
 ├── packaging/
@@ -138,8 +141,8 @@ eves-text/
 └── dist/                      готовые .deb
 ```
 
-`document.py` и `ai_check.py` намеренно не зависят от GTK: их можно
-вызывать из фонового потока и тестировать отдельно.
+`document.py`, `ai_check.py` и `updates.py` намеренно не зависят от GTK:
+их можно вызывать из фонового потока и тестировать отдельно.
 
 ## Проверка
 
@@ -215,3 +218,15 @@ export RU_EDITOR_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
 `RU_EDITOR_AI_MODEL` имеет приоритет над моделью, сохранённой в настройках.
+
+## Обновления
+
+В правом нижнем углу окна есть надпись **«Версия актуальна»**. Нажмите на неё:
+приложение проверит релизы на GitHub и, если появилась новая версия, скачает
+пакет в папку загрузок и покажет путь к файлу. Надпись сменится на
+«Скачана версия X»; повторное нажатие откроет папку с загрузкой.
+
+- Linux: скачивается `.deb`, установка — `sudo dpkg -i <файл>`.
+- Windows: скачивается установщик `.exe`, его нужно запустить.
+
+Проверка и скачивание выполняются в фоне и не блокируют окно.
