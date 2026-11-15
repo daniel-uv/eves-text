@@ -19,12 +19,12 @@
 
   <!-- Лист с маленьким срезанным уголком -->
   <path d="M30 10 H90 L106 26 V112 a6 6 0 0 1 -6 6 H30 a6 6 0 0 1 -6 -6 V16 a6 6 0 0 1 6 -6 Z"
-        fill="url(#page)" stroke="#bcc7d3" stroke-width="2" stroke-linejoin="round"
+        fill="url(#page)" stroke="url(#ink)" stroke-width="2.6" stroke-linejoin="round"
         filter="url(#shadow)"/>
 
   <!-- Загнутый уголок -->
   <path d="M90 10 V22 a4 4 0 0 0 4 4 H106 Z"
-        fill="url(#fold)" stroke="#bcc7d3" stroke-width="2" stroke-linejoin="round"/>
+        fill="url(#fold)" stroke="url(#ink)" stroke-width="2.6" stroke-linejoin="round"/>
 
   <!-- Буква E: острые углы, все полоски одинаковой длины -->
   <path d="M43 34 H87 V46 H55 V58 H87 V70 H55 V82 H87 V94 H43 Z"
