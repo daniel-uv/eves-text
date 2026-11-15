@@ -20,6 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import launcher  # noqa: E402
 
+# В консоли Windows с кодовой страницей 1252 русский текст иначе падает.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 GOOD = "OK"
 BAD = "ОШИБКА"
 
@@ -81,7 +88,12 @@ def main() -> int:
                 print(f"       словарь: {code} ({language.get_name()})")
                 break
         if language is None:
-            raise RuntimeError("ни один словарь не найден (DICPATH?)")
+            available = ", ".join(
+                item.get_code() for item in Gspell.Language.get_available()
+            )
+            raise RuntimeError(
+                f"ни один словарь не найден (DICPATH?); доступны: {available or 'нет'}"
+            )
         return None
 
     results.append(check("gspell", gspell))
@@ -97,7 +109,12 @@ def main() -> int:
             if language is not None:
                 break
         else:
-            raise RuntimeError("нет русского словаря")
+            available = ", ".join(
+                item.get_code() for item in Gspell.Language.get_available()
+            )
+            raise RuntimeError(
+                f"нет русского словаря; доступны: {available or 'нет'}"
+            )
         checker = Gspell.Checker.new(language)
         if checker is None:
             raise RuntimeError("Gspell.Checker.new вернул None")
