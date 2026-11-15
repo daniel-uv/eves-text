@@ -6,8 +6,11 @@
  <g transform="matrix(2,0,0,2,6,0)">
   <circle style="fill:#f34235" cx="21" cy="23" r="8"/>
  </g>
- <!-- Буква E в красном кружке -->
- <path style="fill:#ffffff" d="M 41 37 H 55 V 40.4 H 44.4 V 44.3 H 55 V 47.7 H 44.4 V 51.6 H 55 V 55 H 41 Z"/>
+ <!-- Маленькая e в красном кружке -->
+ <g style="fill:none;stroke:#ffffff;stroke-width:3.4;stroke-linecap:round">
+  <path d="M 57.2 46 A 9.2 9.2 0 1 0 54.5 52.5"/>
+  <path d="M 38.8 46 H 57.2"/>
+ </g>
  <rect style="opacity:0.2" width="34" height="4" x="15" y="9"/>
  <rect style="opacity:0.2" width="34" height="4" x="15" y="18"/>
  <rect style="opacity:0.2" width="20" height="4" x="15" y="27"/>
