@@ -32,7 +32,10 @@ def local_app_data() -> Path:
 
 
 def make_cache(
-    exe: Path, target: Path, extra_env: dict[str, str] | None = None
+    exe: Path,
+    target: Path,
+    extra_env: dict[str, str] | None = None,
+    args: list[str] | None = None,
 ) -> Path | None:
     """Сгенерировать кэш плагинов, если он ещё не создан."""
     if not exe.exists():
@@ -48,7 +51,7 @@ def make_cache(
         env.update(extra_env)
     try:
         result = subprocess.run(
-            [str(exe)],
+            [str(exe), *(args or [])],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -119,10 +122,18 @@ def configure(base: Path) -> None:
     cache_dir = local_app_data() / "cache"
 
     loaders = lib / "gdk-pixbuf-2.0" / "2.10.0" / "loaders"
+    # Без аргументов query-loaders пропускает pixbufloader_svg.dll (librsvg
+    # кладёт его без префикса lib), поэтому перечисляем загрузчики явно.
+    loader_args = (
+        [str(item) for item in sorted(loaders.glob("*.dll"))]
+        if loaders.is_dir()
+        else []
+    )
     loaders_cache = make_cache(
         bin_dir / "gdk-pixbuf-query-loaders.exe",
-        cache_dir / "loaders.cache",
+        cache_dir / "loaders-2.cache",
         {"GDK_PIXBUF_MODULEDIR": str(loaders)},
+        args=loader_args,
     )
     if loaders_cache is not None:
         os.environ["GDK_PIXBUF_MODULE_FILE"] = str(loaders_cache)

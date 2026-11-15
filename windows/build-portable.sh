@@ -96,6 +96,15 @@ cp "$ROOT/eves_text/resources/eves-text.svg" \
 if [ -d "$ROOT/windows/assets/icons/hicolor" ]; then
     cp -a "$ROOT/windows/assets/icons/hicolor/." "$DIST/share/icons/hicolor/"
 fi
+# В пакетах MSYS2 лежат icon-theme.cache, собранные без наших PNG: GTK
+# читает кэш и не видит иконку приложения. Пересобираем кэши тем.
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    for theme in Adwaita AdwaitaLegacy hicolor; do
+        if [ -f "$DIST/share/icons/$theme/index.theme" ]; then
+            ( cd "$DIST/share/icons" && gtk-update-icon-cache -f -q "$theme" ) || true
+        fi
+    done
+fi
 
 if [ -d "$PREFIX/share/locale" ]; then
     cp -a "$PREFIX/share/locale" "$DIST/share/"
