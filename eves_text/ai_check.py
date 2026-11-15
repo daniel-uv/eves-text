@@ -10,10 +10,14 @@ import os
 import urllib.error
 import urllib.request
 
-# Адрес локальной службы Ollama и модель. Можно переопределить переменными
-# окружения, не меняя код.
-BASE_URL = os.environ.get("RU_EDITOR_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
-MODEL_NAME = os.environ.get("RU_EDITOR_AI_MODEL", "qwen2.5:7b-instruct")
+# Адрес локальной службы Ollama и модель. Значения по умолчанию можно
+# переопределить переменными окружения, а во время работы — configure().
+DEFAULT_BASE_URL = os.environ.get(
+    "RU_EDITOR_OLLAMA_URL", "http://127.0.0.1:11434"
+).rstrip("/")
+DEFAULT_MODEL = os.environ.get("RU_EDITOR_AI_MODEL", "qwen2.5:7b-instruct")
+BASE_URL = DEFAULT_BASE_URL
+MODEL_NAME = DEFAULT_MODEL
 
 # Ограничение на размер одного запроса: длинный текст режется по строкам,
 # чтобы модель не теряла конец фрагмента.
@@ -26,6 +30,15 @@ SYSTEM_PROMPT = (
     "Сохрани переводы строк, отступы и табуляцию. "
     "Верни только исправленный текст, без пояснений, комментариев и кавычек."
 )
+
+
+def configure(base_url: str | None = None, model: str | None = None) -> None:
+    """Меняет адрес службы и модель на время работы приложения."""
+    global BASE_URL, MODEL_NAME
+    if base_url:
+        BASE_URL = base_url.rstrip("/")
+    if model:
+        MODEL_NAME = model
 
 
 class AIError(RuntimeError):
@@ -56,14 +69,13 @@ def _post(path: str, payload: dict, timeout: float = TIMEOUT) -> dict:
         if exc.code == 404 or "not found" in detail:
             raise AIError(
                 f"Модель «{MODEL_NAME}» не найдена.\n"
-                f"Скачайте её при следующей проверке текста или выполните "
-                f"в терминале: ollama pull {MODEL_NAME}"
+                "Скачайте её вручную: меню «ИИ» → «Скачать модель…»."
             ) from exc
         raise AIError(f"Ollama вернула ошибку {exc.code}: {detail or exc.reason}") from exc
     except urllib.error.URLError as exc:
         raise AIError(
             "Не удалось подключиться к Ollama.\n"
-            "Проверьте, что служба запущена: systemctl status ollama"
+            "Проверьте, что Ollama установлена и запущена."
         ) from exc
     except TimeoutError as exc:
         raise AIError("Ollama не ответила за отведённое время. Попробуйте ещё раз.") from exc
@@ -73,11 +85,13 @@ def _get(path: str, timeout: float = 5) -> dict:
     try:
         with urllib.request.urlopen(f"{BASE_URL}{path}", timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
-    except urllib.error.URLError as exc:
+    except OSError as exc:
         raise AIError(
             "Не удалось подключиться к Ollama.\n"
-            "Проверьте, что служба запущена: systemctl status ollama"
+            "Проверьте, что Ollama установлена и запущена."
         ) from exc
+    except ValueError as exc:
+        raise AIError("Ollama вернула некорректный ответ.") from exc
 
 
 def _model_matches(name: str, model: str) -> bool:
@@ -90,12 +104,13 @@ def _model_matches(name: str, model: str) -> bool:
     return False
 
 
-def model_state(model: str = MODEL_NAME) -> str:
+def model_state(model: str | None = None) -> str:
     """Состояние модели: «installed», «missing» или «offline».
 
     «offline» означает, что служба Ollama недоступна: отличить отсутствие
     модели от незапущенной службы иначе нельзя.
     """
+    model = model or MODEL_NAME
     try:
         tags = _get("/api/tags")
     except AIError:
@@ -106,13 +121,13 @@ def model_state(model: str = MODEL_NAME) -> str:
     return "missing"
 
 
-def model_installed() -> bool:
+def model_installed(model: str | None = None) -> bool:
     """Загружена ли нужная модель (быстрая проверка без генерации)."""
-    return model_state() == "installed"
+    return model_state(model) == "installed"
 
 
 def pull_model(
-    model: str = MODEL_NAME,
+    model: str | None = None,
     on_progress=None,
     cancel=None,
 ) -> bool:
@@ -124,7 +139,8 @@ def pull_model(
     Возвращает True, если модель действительно скачалась, и False, если
     она уже была установлена. При отмене бросает AICancelled.
     """
-    if model_installed():
+    model = model or MODEL_NAME
+    if model_installed(model):
         return False
 
     payload = json.dumps({"model": model, "stream": True}).encode("utf-8")
@@ -176,7 +192,7 @@ def pull_model(
 
     if cancel is not None and cancel.is_set():
         raise AICancelled("Скачивание модели отменено.")
-    if not model_installed():
+    if not model_installed(model):
         raise AIError(
             f"Модель «{model}» скачалась, но Ollama её не видит.\n"
             "Попробуйте ещё раз или выполните: ollama pull " + model
@@ -191,15 +207,16 @@ def _as_int(value) -> int:
         return 0
 
 
-def loaded_size() -> int:
+def loaded_size(model: str | None = None) -> int:
     """Сколько байт занимает модель в памяти (0, если не загружена)."""
+    model = model or MODEL_NAME
     try:
         data = _get("/api/ps")
     except AIError:
         return 0
     for item in data.get("models", []):
         name = item.get("name") or item.get("model") or ""
-        if name == MODEL_NAME or name.startswith(MODEL_NAME.split(":")[0]):
+        if name == model or name.startswith(model.split(":")[0]):
             try:
                 return int(item.get("size", 0))
             except (TypeError, ValueError):
@@ -207,9 +224,10 @@ def loaded_size() -> int:
     return 0
 
 
-def unload_model(model: str = MODEL_NAME) -> int:
+def unload_model(model: str | None = None) -> int:
     """Выгружает модель из памяти. Возвращает освобождённые байты."""
-    size = loaded_size()
+    model = model or MODEL_NAME
+    size = loaded_size(model)
     # keep_alive=0 — документированный способ сразу выгрузить модель.
     _post("/api/generate", {"model": model, "keep_alive": 0}, timeout=60)
     return size
@@ -280,8 +298,9 @@ def _check_chunk(text: str, model: str) -> str:
     return _clean_answer(content)
 
 
-def check_text(text: str, model: str = MODEL_NAME) -> str:
+def check_text(text: str, model: str | None = None) -> str:
     """Возвращает исправленный текст. Бросает AIError при проблемах."""
+    model = model or MODEL_NAME
     if not text.strip():
         return text
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -15,6 +16,12 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, GtkSource, Pango  # noqa: E402
 
 from . import ai_check, document  # noqa: E402
+from . import settings as user_settings  # noqa: E402
+from .ollama_server import (  # noqa: E402
+    ManagedOllama,
+    OllamaStartError,
+    default_models_dir,
+)
 from .spellcheck import SpellCheck  # noqa: E402
 
 APP_NAME = "Eve's Text"
@@ -95,6 +102,19 @@ class MainWindow(Gtk.ApplicationWindow):
         self.encoding = "UTF-8"
         self._counts_timeout = 0
         self._counts_cache = (-1, -1, -1)
+
+        config = user_settings.load()
+        self._managed_ollama = ManagedOllama()
+        self._backend_lock = threading.Lock()
+        self._ollama_log_path = user_settings.config_dir() / "ollama-server.log"
+        self._models_dir = str(config.get("models_dir") or "").strip()
+        env_model = os.environ.get("RU_EDITOR_AI_MODEL")
+        saved_model = str(config.get("model") or "").strip()
+        self._model_name = env_model or saved_model or ai_check.DEFAULT_MODEL
+        ai_check.configure(
+            base_url=ai_check.DEFAULT_BASE_URL, model=self._model_name
+        )
+
         self._ai_busy = False
         self._ai_enabled = True
         self._ai_unloading = False
@@ -117,6 +137,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._install_actions(application)
         self._connect_signals()
         self._install_focus_handling()
+        self.connect("destroy", self._on_destroy)
         self._apply_style_scheme()
         self._update_title()
         self._update_status()
@@ -293,6 +314,17 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         menubar.append(view_item)
 
+        ai_item = Gtk.MenuItem.new_with_mnemonic("_ИИ")
+        ai_menu = Gtk.Menu()
+        ai_item.set_submenu(ai_menu)
+        ai_menu.append(self._item("_Скачать модель…", "win.ai-download"))
+        ai_menu.append(self._item("_Папка моделей…", "win.ai-models-dir"))
+        ai_menu.append(Gtk.SeparatorMenuItem())
+        ai_menu.append(
+            self._item("Использовать системную Ollama", "win.ai-system")
+        )
+        menubar.append(ai_item)
+
         help_item = Gtk.MenuItem.new_with_mnemonic("_Справка")
         help_menu = Gtk.Menu()
         help_item.set_submenu(help_menu)
@@ -350,6 +382,9 @@ class MainWindow(Gtk.ApplicationWindow):
             ("delete", self.action_delete, []),
             ("select-all", self.action_select_all, ["<Primary>a"]),
             ("quit", self.action_quit, ["<Primary>q"]),
+            ("ai-download", self.action_ai_download, []),
+            ("ai-models-dir", self.action_ai_models_dir, []),
+            ("ai-system", self.action_ai_system, []),
         ]
         for name, handler, accels in entries:
             action = Gio.SimpleAction.new(name, None)
@@ -671,6 +706,9 @@ class MainWindow(Gtk.ApplicationWindow):
         if self._ai_unloading:
             self._show_message("Модель ещё выгружается…")
             return
+        if self._ai_pulling:
+            self._show_message("Дождитесь окончания скачивания модели")
+            return
 
         if self._ai_enabled:
             if self._ai_busy:
@@ -681,25 +719,39 @@ class MainWindow(Gtk.ApplicationWindow):
             self._ai_unloading = True
             self.ai_button.set_sensitive(False)
             self._show_message(
-                f"Выгружаю модель {ai_check.MODEL_NAME} из памяти…", seconds=0
+                f"Выгружаю модель {self._model_name} из памяти…", seconds=0
             )
             threading.Thread(target=self._ai_unload_worker, daemon=True).start()
         else:
             self._ai_enabled = True
             self._update_ai_button()
             self._show_message(
-                "ИИ включён. Если модели нет, приложение предложит её скачать."
+                "ИИ включён. Модель загрузится при первой проверке; "
+                "скачать её можно в меню «ИИ» → «Скачать модель…»."
             )
 
     def _ai_unload_worker(self) -> None:
         freed = 0
         error: str | None = None
         try:
-            freed = ai_check.unload_model()
+            if self._models_dir:
+                # Своя служба: выгружаем только если она уже запущена.
+                base_url = self._managed_ollama.base_url
+                if self._managed_ollama.running() and base_url:
+                    ai_check.configure(base_url=base_url, model=self._model_name)
+                    freed = ai_check.unload_model(self._model_name)
+            else:
+                ai_check.configure(
+                    base_url=ai_check.DEFAULT_BASE_URL, model=self._model_name
+                )
+                freed = ai_check.unload_model(self._model_name)
         except ai_check.AIError as exc:
             error = str(exc)
         except Exception as exc:  # noqa: BLE001 - поток не должен падать молча
             error = f"Неожиданная ошибка: {exc}"
+        finally:
+            # Выключение ИИ останавливает и отдельную службу.
+            self._managed_ollama.stop()
         GLib.idle_add(self._ai_unload_finished, freed, error)
 
     def _ai_unload_finished(self, freed: int, error: str | None) -> bool:
@@ -726,6 +778,12 @@ class MainWindow(Gtk.ApplicationWindow):
         if not self._ai_enabled:
             self._show_message("ИИ выключен — включите кнопкой внизу панели")
             return
+        if self._ai_pulling:
+            self._show_message("Дождитесь окончания скачивания модели")
+            return
+        if self._ai_unloading:
+            self._show_message("Модель ещё выгружается…")
+            return
         if self._ai_busy:
             self._show_message("Проверка уже идёт…")
             return
@@ -750,14 +808,33 @@ class MainWindow(Gtk.ApplicationWindow):
         ).start()
 
     # Модель может быть ещё не скачана. Перед проверкой узнаём её состояние
-    # в фоне, чтобы не подвешивать окно, и при необходимости предлагаем
-    # скачать модель прямо из приложения.
+    # в фоне, чтобы не подвешивать окно. Скачивание запускается только вручную
+    # из меню «ИИ», поэтому при отсутствии модели показываем подсказку.
+
+    def _ensure_backend(self) -> str:
+        """Активирует выбранную службу Ollama и возвращает её адрес.
+
+        Вызывается из фоновых потоков: запуск отдельной службы занимает время.
+        """
+        with self._backend_lock:
+            if self._models_dir:
+                base_url = self._managed_ollama.ensure(
+                    self._models_dir, log_path=self._ollama_log_path
+                )
+            else:
+                self._managed_ollama.stop()
+                base_url = ai_check.DEFAULT_BASE_URL
+            ai_check.configure(base_url=base_url, model=self._model_name)
+            return base_url
 
     def _ai_probe_worker(self, text: str, offset: int) -> None:
         state = "offline"
         error: str | None = None
         try:
-            state = ai_check.model_state()
+            self._ensure_backend()
+            state = ai_check.model_state(self._model_name)
+        except (ai_check.AIError, OllamaStartError) as exc:
+            error = str(exc)
         except Exception as exc:  # noqa: BLE001 - поток не должен падать молча
             error = f"Неожиданная ошибка: {exc}"
         GLib.idle_add(self._ai_probe_finished, text, offset, state, error)
@@ -770,66 +847,279 @@ class MainWindow(Gtk.ApplicationWindow):
 
         if error is not None:
             self._ai_busy = False
-            self._show_message("ИИ не смог проверить текст", seconds=10)
-            self._show_ai_error(error)
+            self._show_message("Ollama не запущена", seconds=10)
+            self._show_notice("ИИ недоступен", error)
             return False
 
         if state == "offline":
             self._ai_busy = False
             self._show_message("Ollama не запущена", seconds=10)
-            self._show_ai_error(
-                "Не удалось подключиться к Ollama.\n"
-                "Проверьте, что служба запущена: systemctl status ollama"
-            )
+            if self._models_dir:
+                details = (
+                    "Не удалось подключиться к отдельной службе Ollama.\n"
+                    "Проверьте, что Ollama установлена: https://ollama.com"
+                )
+            else:
+                details = (
+                    "Не удалось подключиться к Ollama.\n"
+                    "Запустите службу Ollama или выберите отдельную папку "
+                    "моделей: меню «ИИ» → «Папка моделей…»."
+                )
+            self._show_notice("ИИ недоступен", details)
             return False
 
         if state == "missing":
-            self._ask_download_model(text, offset)
+            self._ai_busy = False
+            self._show_message(
+                f"Модель «{self._model_name}» не скачана. "
+                "Меню «ИИ» → «Скачать модель…»",
+                seconds=15,
+            )
             return False
 
         self._show_message(
-            f"Проверяю текст с ИИ (модель {ai_check.MODEL_NAME})…", seconds=0
+            f"Проверяю текст с ИИ (модель {self._model_name})…", seconds=0
         )
         threading.Thread(
             target=self._ai_worker, args=(text, offset), daemon=True
         ).start()
         return False
 
-    def _ask_download_model(self, text: str, offset: int) -> None:
-        dialog = Gtk.MessageDialog(
-            transient_for=self,
-            modal=True,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.NONE,
-            text="Модель для ИИ не найдена",
-        )
-        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
-        dialog.add_button("Скачать", Gtk.ResponseType.YES)
-        dialog.set_default_response(Gtk.ResponseType.YES)
-        dialog.format_secondary_text(
-            f"Для проверки текста нужна модель «{ai_check.MODEL_NAME}», "
-            "но её ещё нет на этом компьютере.\n\n"
-            "Скачать сейчас? Это может занять несколько минут и потребовать "
-            "несколько гигабайт свободного места. Скачивание можно отменить."
-        )
-        dialog.connect(
-            "response", self._on_download_response, text, offset
-        )
-        dialog.show()
+    # ------------------------------------------------------- AI model setup
 
-    def _on_download_response(
-        self, dialog: Gtk.MessageDialog, response: int, text: str, offset: int
-    ) -> None:
-        dialog.destroy()
-        if response != Gtk.ResponseType.YES:
-            self._ai_busy = False
-            self._show_message(
-                "Проверка отменена: модель не скачана", seconds=10
-            )
+    def _save_ai_settings(self) -> None:
+        """Сохраняет модель и папку в общий файл настроек."""
+        config = user_settings.load()
+        config["model"] = self._model_name
+        config["models_dir"] = self._models_dir
+        try:
+            user_settings.save(config)
+        except OSError as exc:
+            self._show_message(f"Не удалось сохранить настройки: {exc}", seconds=12)
+
+    def action_ai_download(self, *_args) -> None:
+        """Ручное скачивание модели в выбранную папку."""
+        if self._ai_unloading:
+            self._show_message("Модель ещё выгружается…")
             return
-        self._start_model_pull(text, offset)
+        if self._ai_pulling:
+            self._show_message("Скачивание уже идёт…")
+            return
+        if self._ai_busy:
+            self._show_message("Дождитесь окончания проверки текста")
+            return
 
-    def _start_model_pull(self, text: str, offset: int) -> None:
+        dialog = Gtk.Dialog(title="Скачать модель", transient_for=self, modal=True)
+        dialog.set_default_size(600, -1)
+        dialog.set_resizable(True)
+        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Скачать", Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+
+        content = dialog.get_content_area()
+        content.set_border_width(16)
+        content.set_spacing(10)
+
+        header = Gtk.Label()
+        header.set_markup("<b>Скачивание модели Ollama</b>")
+        header.set_xalign(0.0)
+        content.pack_start(header, False, False, 0)
+
+        explanation = Gtk.Label(
+            label=(
+                "Модель будет сохранена в выбранную папку. Для неё приложение "
+                "запустит отдельную службу Ollama и не изменит системную."
+            )
+        )
+        explanation.set_xalign(0.0)
+        explanation.set_line_wrap(True)
+        explanation.get_style_context().add_class("dim-label")
+        content.pack_start(explanation, False, False, 0)
+
+        grid = Gtk.Grid(column_spacing=10, row_spacing=10)
+        model_label = Gtk.Label(label="Модель:", xalign=0.0)
+        model_entry = Gtk.Entry()
+        model_entry.set_text(self._model_name)
+        model_entry.set_hexpand(True)
+        model_entry.set_placeholder_text("например, qwen2.5:7b-instruct")
+        grid.attach(model_label, 0, 0, 1, 1)
+        grid.attach(model_entry, 1, 0, 1, 1)
+
+        dir_label = Gtk.Label(label="Папка для моделей:", xalign=0.0)
+        dir_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        dir_entry = Gtk.Entry()
+        dir_entry.set_text(self._models_dir or str(default_models_dir()))
+        dir_entry.set_hexpand(True)
+        choose_button = Gtk.Button(label="Выбрать…")
+        choose_button.connect(
+            "clicked", self._choose_models_folder, dir_entry, dialog
+        )
+        dir_box.pack_start(dir_entry, True, True, 0)
+        dir_box.pack_start(choose_button, False, False, 0)
+        grid.attach(dir_label, 0, 1, 1, 1)
+        grid.attach(dir_box, 1, 1, 1, 1)
+        content.pack_start(grid, False, False, 0)
+
+        hint = Gtk.Label(
+            label=(
+                "Название и размер модели задаёт Ollama. Скачивание может "
+                "занять несколько минут; его можно отменить."
+            )
+        )
+        hint.set_xalign(0.0)
+        hint.set_line_wrap(True)
+        hint.get_style_context().add_class("dim-label")
+        content.pack_start(hint, False, False, 0)
+
+        error_label = Gtk.Label()
+        error_label.set_xalign(0.0)
+        error_label.set_line_wrap(True)
+        error_label.set_no_show_all(True)
+        content.pack_start(error_label, False, False, 0)
+
+        def on_response(dlg: Gtk.Dialog, response: int) -> None:
+            if response != Gtk.ResponseType.OK:
+                dlg.destroy()
+                return
+            model = model_entry.get_text().strip()
+            directory = dir_entry.get_text().strip()
+            if not model:
+                error_label.set_text("Укажите название модели.")
+                error_label.show()
+                return
+            if not directory:
+                error_label.set_text("Укажите папку для моделей.")
+                error_label.show()
+                return
+            path = Path(directory).expanduser()
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                error_label.set_text(f"Не удалось создать папку:\n{exc}")
+                error_label.show()
+                return
+            if not path.is_dir():
+                error_label.set_text("Выбранный путь не является папкой.")
+                error_label.show()
+                return
+            dlg.destroy()
+            self._model_name = model
+            self._models_dir = str(path)
+            self._save_ai_settings()
+            self._start_model_pull()
+
+        dialog.connect("response", on_response)
+        dialog.show_all()
+
+    def _choose_models_folder(
+        self, _button: Gtk.Button, entry: Gtk.Entry, parent: Gtk.Window
+    ) -> None:
+        chooser = Gtk.FileChooserNative(
+            title="Папка для моделей",
+            transient_for=parent,
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
+            accept_label="Выбрать",
+            cancel_label="Отмена",
+        )
+        current = entry.get_text().strip()
+        if current:
+            path = Path(current).expanduser()
+            if path.is_dir():
+                chooser.set_current_folder(str(path))
+        chooser.connect(
+            "response",
+            lambda dlg, response: self._on_folder_chosen(dlg, response, entry),
+        )
+        chooser.show()
+
+    @staticmethod
+    def _on_folder_chosen(
+        chooser: Gtk.FileChooserNative, response: int, entry: Gtk.Entry
+    ) -> None:
+        filename = chooser.get_filename()
+        chooser.destroy()
+        if response == Gtk.ResponseType.ACCEPT and filename:
+            entry.set_text(filename)
+
+    def action_ai_models_dir(self, *_args) -> None:
+        """Выбор папки, в которой хранятся модели отдельной службы."""
+        if self._ai_unloading:
+            self._show_message("Модель ещё выгружается…")
+            return
+        if self._ai_pulling:
+            self._show_message("Дождитесь окончания скачивания модели")
+            return
+        if self._ai_busy:
+            self._show_message("Дождитесь окончания проверки текста")
+            return
+
+        chooser = Gtk.FileChooserNative(
+            title="Папка для моделей Ollama",
+            transient_for=self,
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
+            accept_label="Выбрать",
+            cancel_label="Отмена",
+        )
+        current = self._models_dir or str(default_models_dir())
+        path = Path(current).expanduser()
+        if path.is_dir():
+            chooser.set_current_folder(str(path))
+        chooser.connect("response", self._on_models_dir_response)
+        chooser.show()
+
+    def _on_models_dir_response(
+        self, chooser: Gtk.FileChooserNative, response: int
+    ) -> None:
+        filename = chooser.get_filename()
+        chooser.destroy()
+        if response != Gtk.ResponseType.ACCEPT or not filename:
+            return
+
+        path = Path(filename).expanduser()
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._show_notice("Папка моделей", f"Не удалось создать папку:\n{exc}")
+            return
+        if not path.is_dir():
+            self._show_notice("Папка моделей", "Выбранный путь не является папкой.")
+            return
+
+        self._models_dir = str(path)
+        self._save_ai_settings()
+        # Следующая операция запустит службу уже с новой папкой.
+        self._managed_ollama.stop()
+        self._show_message(
+            f"Папка моделей: {path}. "
+            "Скачайте модель: меню «ИИ» → «Скачать модель…»",
+            seconds=15,
+        )
+
+    def action_ai_system(self, *_args) -> None:
+        """Переключает проверку на системную Ollama."""
+        if self._ai_unloading:
+            self._show_message("Модель ещё выгружается…")
+            return
+        if self._ai_pulling:
+            self._show_message("Дождитесь окончания скачивания модели")
+            return
+        if self._ai_busy:
+            self._show_message("Дождитесь окончания проверки текста")
+            return
+
+        self._models_dir = ""
+        self._save_ai_settings()
+        self._managed_ollama.stop()
+        ai_check.configure(
+            base_url=ai_check.DEFAULT_BASE_URL, model=self._model_name
+        )
+        self._show_message(
+            "Используется системная Ollama. Модель можно скачать командой "
+            f"ollama pull {self._model_name}.",
+            seconds=15,
+        )
+
+    def _start_model_pull(self) -> None:
         if self._ai_pulling:
             return
         self._ai_pulling = True
@@ -837,9 +1127,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._ai_pull_status = ""
         self._ai_pull_last_update = 0.0
         self._build_pull_dialog()
-        threading.Thread(
-            target=self._ai_pull_worker, args=(text, offset), daemon=True
-        ).start()
+        threading.Thread(target=self._ai_pull_worker, daemon=True).start()
 
     def _build_pull_dialog(self) -> None:
         dialog = Gtk.Dialog(
@@ -860,13 +1148,18 @@ class MainWindow(Gtk.ApplicationWindow):
         header = Gtk.Label()
         header.set_markup(
             "Скачиваю модель <b>"
-            f"{GLib.markup_escape_text(ai_check.MODEL_NAME)}</b>"
+            f"{GLib.markup_escape_text(self._model_name)}</b>"
         )
         header.set_xalign(0.0)
         header.set_line_wrap(True)
         content.pack_start(header, False, False, 0)
 
-        self._ai_pull_title = Gtk.Label(label="Подключаюсь к Ollama…")
+        initial = (
+            "Запускаю отдельную службу Ollama…"
+            if self._models_dir
+            else "Подключаюсь к Ollama…"
+        )
+        self._ai_pull_title = Gtk.Label(label=initial)
         self._ai_pull_title.set_xalign(0.0)
         self._ai_pull_title.set_line_wrap(True)
         content.pack_start(self._ai_pull_title, False, False, 0)
@@ -875,11 +1168,20 @@ class MainWindow(Gtk.ApplicationWindow):
         self._ai_pull_progress.set_show_text(True)
         content.pack_start(self._ai_pull_progress, False, False, 0)
 
-        self._ai_pull_detail = Gtk.Label(
-            label="Скачивание можно отменить — загруженные части сохранятся."
-        )
+        if self._models_dir:
+            detail = (
+                f"Папка: {self._models_dir}\n"
+                "Скачивание можно отменить — загруженные части сохранятся."
+            )
+        else:
+            detail = (
+                "Системная Ollama. Скачивание можно отменить — загруженные "
+                "части сохранятся."
+            )
+        self._ai_pull_detail = Gtk.Label(label=detail)
         self._ai_pull_detail.set_xalign(0.0)
         self._ai_pull_detail.set_line_wrap(True)
+        self._ai_pull_detail.set_selectable(True)
         self._ai_pull_detail.get_style_context().add_class("dim-label")
         content.pack_start(self._ai_pull_detail, False, False, 0)
 
@@ -932,33 +1234,31 @@ class MainWindow(Gtk.ApplicationWindow):
             self._ai_pull_progress.set_text("")
         return False
 
-    def _ai_pull_worker(self, text: str, offset: int) -> None:
+    def _ai_pull_worker(self) -> None:
         downloaded = False
         cancelled = False
         error: str | None = None
         try:
+            self._ensure_backend()
             downloaded = ai_check.pull_model(
+                model=self._model_name,
                 on_progress=self._ai_pull_progress_cb,
                 cancel=self._ai_pull_cancel,
             )
         except ai_check.AICancelled as exc:
             cancelled = True
             error = str(exc)
-        except ai_check.AIError as exc:
+        except (ai_check.AIError, OllamaStartError) as exc:
             error = str(exc)
         except Exception as exc:  # noqa: BLE001 - поток не должен падать молча
             error = f"Неожиданная ошибка: {exc}"
-        GLib.idle_add(
-            self._ai_pull_finished, downloaded, cancelled, error, text, offset
-        )
+        GLib.idle_add(self._ai_pull_finished, downloaded, cancelled, error)
 
     def _ai_pull_finished(
         self,
         downloaded: bool,
         cancelled: bool,
         error: str | None,
-        text: str,
-        offset: int,
     ) -> bool:
         self._ai_pulling = False
         self._ai_pull_cancel = None
@@ -975,36 +1275,31 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
 
         if cancelled:
-            self._ai_busy = False
             self._show_message("Скачивание модели отменено", seconds=10)
             return False
 
         if error is not None:
-            self._ai_busy = False
             self._show_message("Не удалось скачать модель", seconds=10)
-            self._show_ai_error(error)
+            self._show_notice("Не удалось скачать модель", error)
             return False
 
+        location = self._models_dir or "папка системной Ollama"
         if downloaded:
             self._show_message(
-                f"Модель {ai_check.MODEL_NAME} скачана. Проверяю текст…",
-                seconds=0,
+                f"Модель «{self._model_name}» скачана: {location}", seconds=15
             )
         else:
             self._show_message(
-                f"Модель {ai_check.MODEL_NAME} уже скачана. Проверяю текст…",
-                seconds=0,
+                f"Модель «{self._model_name}» уже была скачана: {location}",
+                seconds=15,
             )
-        threading.Thread(
-            target=self._ai_worker, args=(text, offset), daemon=True
-        ).start()
         return False
 
     def _ai_worker(self, text: str, offset: int) -> None:
         corrected: str | None = None
         error: str | None = None
         try:
-            corrected = ai_check.check_text(text)
+            corrected = ai_check.check_text(text, model=self._model_name)
         except ai_check.AIError as exc:
             error = str(exc)
         except Exception as exc:  # noqa: BLE001 - поток не должен падать молча
@@ -1057,17 +1352,21 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         return False
 
-    def _show_ai_error(self, message: str) -> None:
+    def _show_notice(self, title: str, message: str) -> None:
+        """Немодальное сообщение об ошибке: не блокирует окно."""
         dialog = Gtk.MessageDialog(
             transient_for=self,
             modal=True,
             message_type=Gtk.MessageType.ERROR,
             buttons=Gtk.ButtonsType.CLOSE,
-            text="Не удалось проверить текст",
+            text=title,
         )
         dialog.format_secondary_text(message)
         dialog.connect("response", lambda dlg, _response: dlg.destroy())
         dialog.show()
+
+    def _show_ai_error(self, message: str) -> None:
+        self._show_notice("Не удалось проверить текст", message)
 
     # ---------------------------------------------------------------- theme
 
@@ -1298,6 +1597,12 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_delete_event(self, *_args) -> bool:
         return not self._confirm_discard()
+
+    def _on_destroy(self, *_args) -> None:
+        """Останавливает скачивание и отдельную службу при закрытии окна."""
+        if self._ai_pull_cancel is not None:
+            self._ai_pull_cancel.set()
+        self._managed_ollama.stop()
 
     def _on_drag_data(self, widget, context, x, y, data, info, time) -> None:
         uris = data.get_uris() or []
