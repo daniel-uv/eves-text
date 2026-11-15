@@ -23,6 +23,9 @@ except (ValueError, ImportError):  # pragma: no cover
 WORD_RE = re.compile(r"[0-9A-Za-zА-Яа-яЁё]+(?:[-'][0-9A-Za-zА-Яа-яЁё]+)*")
 TAG_NAME = "spell-error"
 DEFAULT_LANGUAGE = "ru_RU"
+# На Windows словарь может быть зарегистрирован без региона или под другим
+# кодом, поэтому пробуем несколько вариантов по порядку.
+LANGUAGE_CANDIDATES = ("ru_RU", "ru", "en_US", "en")
 SCAN_DELAY_MS = 350
 
 
@@ -53,7 +56,13 @@ class SpellCheck:
     def _make_checker():
         if Gspell is None:
             return None
-        language = Gspell.Language.lookup(DEFAULT_LANGUAGE) or Gspell.Language.get_default()
+        language = None
+        for code in LANGUAGE_CANDIDATES:
+            language = Gspell.Language.lookup(code)
+            if language is not None:
+                break
+        if language is None:
+            language = Gspell.Language.get_default()
         if language is None:
             return None
         try:

@@ -59,7 +59,7 @@ chmod 755 "$PREFIX/bin/$PKG"
 # --- данные
 install -m644 eves_text/resources/eves-text.desktop \
     "$PREFIX/share/applications/$PKG.desktop"
-install -m644 packaging/eves-text.svg \
+install -m644 eves_text/resources/eves-text.svg \
     "$PREFIX/share/icons/hicolor/scalable/apps/$PKG.svg"
 install -m644 packaging/copyright "$PREFIX/share/doc/$PKG/copyright"
 

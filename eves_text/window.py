@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 
@@ -26,6 +27,13 @@ ALIGNMENTS: tuple[tuple[str, str, Gtk.Justification, str], ...] = (
 )
 
 DEFAULT_FONT_SIZE = 12
+
+
+def default_font_family() -> str:
+    """Моноширинный шрифт, который точно есть в системе."""
+    if sys.platform == "win32":
+        return "Consolas"
+    return "Monospace"
 
 # Поля вокруг текста внутри редактора (в пикселях).
 TEXT_MARGIN_X = 64
@@ -76,7 +84,9 @@ class MainWindow(Gtk.ApplicationWindow):
     def _build_view(self) -> None:
         self.buffer = GtkSource.Buffer()
         self.buffer.set_highlight_syntax(False)
-        font = Pango.FontDescription.from_string(f"Monospace {DEFAULT_FONT_SIZE}")
+        font = Pango.FontDescription.from_string(
+            f"{default_font_family()} {DEFAULT_FONT_SIZE}"
+        )
 
         self.view = GtkSource.View.new_with_buffer(self.buffer)
         self.view.modify_font(font)
@@ -357,7 +367,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_font_size_changed(self, spin: Gtk.SpinButton) -> None:
         size = int(spin.get_value())
-        self.view.modify_font(Pango.FontDescription.from_string(f"Monospace {size}"))
+        self.view.modify_font(
+            Pango.FontDescription.from_string(f"{default_font_family()} {size}")
+        )
 
     def _on_alignment_toggled(self, button: Gtk.ToggleButton, key: str) -> None:
         if self._align_guard:

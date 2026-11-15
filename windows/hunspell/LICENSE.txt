@@ -1,0 +1,18 @@
+Словари орфографии для Eve's Text (Windows)
+
+ru_RU.aff, ru_RU.dic
+    Русский словарь из проекта LibreOffice Dictionaries.
+    Copyright: The LibreOffice Project
+    Лицензия: MPL-2.0 — https://www.mozilla.org/MPL/2.0/
+    Источник: https://github.com/LibreOffice/dictionaries
+
+en_US.aff, en_US.dic
+    Английский словарь SCOWL (Spell Checker Oriented Word Lists).
+    Copyright 2000-2011 Kevin Atkinson и другие участники.
+    Разрешение на использование, копирование, изменение и распространение
+    предоставлено безвозмездно при сохранении этого уведомления.
+    Источник: http://wordlist.sourceforge.net/
+
+Словари распространяются отдельно от кода Eve's Text (MIT) и подчиняются
+условиям своих лицензий. При распространении сборки эти файлы и данное
+уведомление должны оставаться вместе.

@@ -1,7 +1,15 @@
 # Eve's Text
 
-Eve's Text — простой текстовый редактор для Linux (GTK 3 + GtkSourceView 4 + gspell).
+Eve's Text — простой текстовый редактор для Linux и Windows (GTK 3 + GtkSourceView 4 + gspell).
 База для будущей ИИ-проверки грамматики и пунктуации на русском.
+
+## Windows 11
+
+Отдельная сборка для Windows лежит в папке [`windows/`](windows/README.md):
+установщик и портативный ZIP со всем рантаймом (Python, GTK, словари).
+Готовые файлы — в разделе
+[Releases](https://github.com/daniel-uv/eves-text/releases);
+сборка идёт автоматически через GitHub Actions.
 
 ## Возможности
 
@@ -37,8 +45,8 @@ python3 -m eves_text --version
 ## Сборка и установка .deb
 
 ```bash
-./packaging/build-deb.sh                 # -> dist/eves-text_0.5.8-1_all.deb
-sudo dpkg -i dist/eves-text_0.5.8-1_all.deb
+./packaging/build-deb.sh                 # -> dist/eves-text_0.6.0-1_all.deb
+sudo dpkg -i dist/eves-text_0.6.0-1_all.deb
 eves-text                                # или из меню «Eve's Text»
 ```
 
@@ -53,9 +61,9 @@ MAINTAINER="Имя <mail@example.org>" ./packaging/build-deb.sh
 Проверить пакет без установки:
 
 ```bash
-dpkg-deb --info dist/eves-text_0.5.8-1_all.deb
-dpkg-deb -c dist/eves-text_0.5.8-1_all.deb
-dpkg-deb -x dist/eves-text_0.5.8-1_all.deb /tmp/eves-text-root
+dpkg-deb --info dist/eves-text_0.6.0-1_all.deb
+dpkg-deb -c dist/eves-text_0.6.0-1_all.deb
+dpkg-deb -x dist/eves-text_0.6.0-1_all.deb /tmp/eves-text-root
 /tmp/eves-text-root/usr/lib/eves-text/eves-text --version
 ```
 

@@ -4,3 +4,5 @@ build/
 dist/
 .venv/
 *.deb
+windows/dist/
+windows/dist-installer/

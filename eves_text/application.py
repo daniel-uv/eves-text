@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -43,8 +44,47 @@ class Application(Gtk.Application):
 
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
-        Gtk.Window.set_default_icon_name(app_icon_name())
+        self._setup_icons()
+        self._apply_system_theme()
         self._load_css()
+
+    @staticmethod
+    def _setup_icons() -> None:
+        """Иконка из темы или из файла рядом с пакетом (Windows-бандл)."""
+        data_dir = os.environ.get("EVES_TEXT_DATA_DIR")
+        theme = Gtk.IconTheme.get_default()
+        if data_dir and theme is not None:
+            icons = Path(data_dir) / "icons"
+            if icons.is_dir():
+                theme.append_search_path(str(icons))
+
+        Gtk.Window.set_default_icon_name(app_icon_name())
+        if theme is None or not theme.has_icon("eves-text"):
+            icon_file = Path(__file__).parent / "resources" / "eves-text.svg"
+            if icon_file.exists():
+                try:
+                    Gtk.Window.set_default_icon_from_file(str(icon_file))
+                except GLib.Error:
+                    pass
+
+    @staticmethod
+    def _apply_system_theme() -> None:
+        """На Windows 11 берём светлую/тёмную тему из настроек системы."""
+        if sys.platform != "win32":
+            return
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            ) as key:
+                light, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        except OSError:
+            return
+        settings = Gtk.Settings.get_default()
+        if settings is not None:
+            settings.set_property("gtk-application-prefer-dark-theme", not bool(light))
 
     @staticmethod
     def _load_css() -> None:

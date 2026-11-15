@@ -1,0 +1,148 @@
+# Eve's Text для Windows 11
+
+Отдельная сборка редактора для Windows. Код приложения общий с Linux-версией,
+отличается только рантайм: GTK3 и Python поставляются вместе с программой,
+поэтому устанавливать MSYS2 или Python пользователю не нужно.
+
+## Что скачать
+
+На странице релизов https://github.com/daniel-uv/eves-text/releases :
+
+- `EvesText-<версия>-win64-setup.exe` — установщик (рекомендуется);
+- `EvesText-<версия>-win64-portable.zip` — портативная версия: распаковать
+  в любую папку и запустить `Eve's Text.vbs`.
+
+Требования: Windows 10 (22000) или Windows 11, 64-битная система.
+Установщик кладёт программу в `C:\Program Files\Eve's Text` и создаёт ярлыки
+в меню «Пуск» и (по желанию) на рабочем столе.
+
+## Как запускать
+
+- Обычный запуск — ярлык «Eve's Text» или `Eve's Text.vbs` в папке программы.
+- Диагностический запуск с консолью — `eves-text.bat`: если приложение падает,
+  в окне будет виден текст ошибки, а подробности попадут в
+  `%LOCALAPPDATA%\Eve's Text\crash.log`.
+- Проверка рантайма — в папке программы:
+
+  ```bat
+  bin\python.exe app\check_runtime.py
+  bin\python.exe app\check_runtime.py --gui
+  ```
+
+  Первая команда проверяет GTK, GtkSourceView, gspell, словарь и шрифт,
+  вторая дополнительно открывает тестовое окно на 3 секунды.
+
+## ИИ-проверка
+
+Проверка текста идёт через Ollama на `http://localhost:11434`, как и в
+Linux-версии. На Windows должен быть установлен и запущен
+[Ollama](https://ollama.com/), модель скачивается командой:
+
+```bat
+ollama pull qwen2.5:3b
+```
+
+Выделите текст → правый клик → «Проверить с ИИ». Кнопка «Выключить ИИ»
+выгружает модель из памяти.
+
+## Орфография
+
+В сборку входят словари `ru_RU` (LibreOffice, MPL-2.0) и `en_US` (SCOWL).
+Они лежат в `share\hunspell`; путь передаётся enchant через переменную
+`DICPATH` в лаунчере. Если русский словарь не подхватился, проверьте
+`check_runtime.py` — он печатает, какой язык найден.
+
+## Как устроена папка
+
+```text
+Eve's Text\
+├── bin\                 python.exe, pythonw.exe и все DLL GTK/enchant
+├── lib\                 стандартная библиотека Python, typelibs, плагины GTK
+├── share\               схемы GSettings, иконки, стили GtkSourceView,
+│   ├── gtksourceview-4\ подсветка синтаксиса
+│   ├── hunspell\        словари орфографии
+│   └── icons\           иконка приложения
+├── etc\fonts\           конфигурация fontconfig (берёт шрифты Windows)
+├── app\                 код eves_text, launcher.py, check_runtime.py
+├── Eve's Text.vbs       запуск без консоли
+├── eves-text.bat        запуск с консолью (диагностика)
+└── VERSION.txt
+```
+
+Кэши загрузчиков gdk-pixbuf и модулей ввода генерируются при первом запуске
+в `%LOCALAPPDATA%\Eve's Text\cache`, чтобы в сборку не попали пути машины,
+на которой она собрана. При обновлении сборки кэш пересоздаётся сам.
+
+## Сборка
+
+Сборка автоматическая: GitHub Actions, workflow `.github/workflows/windows.yml`.
+На каждый пуш в `main` собираются артефакты, а по тегу `win-v<версия>`
+создаётся релиз с ZIP и установщиком.
+
+Локальная сборка на Windows (MSYS2 UCRT64):
+
+1. Установите [MSYS2](https://www.msys2.org/) и откройте терминал **UCRT64**.
+2. Поставьте зависимости:
+
+   ```bash
+   pacman -S --needed \
+       mingw-w64-ucrt-x86_64-python \
+       mingw-w64-ucrt-x86_64-python-gobject \
+       mingw-w64-ucrt-x86_64-gtk3 \
+       mingw-w64-ucrt-x86_64-gtksourceview4 \
+       mingw-w64-ucrt-x86_64-gspell \
+       mingw-w64-ucrt-x86_64-enchant \
+       mingw-w64-ucrt-x86_64-hunspell \
+       mingw-w64-ucrt-x86_64-librsvg \
+       mingw-w64-ucrt-x86_64-adwaita-icon-theme \
+       mingw-w64-ucrt-x86_64-hicolor-icon-theme \
+       mingw-w64-ucrt-x86_64-fontconfig \
+       mingw-w64-ucrt-x86_64-glib2
+   ```
+
+3. Соберите бандл из корня репозитория:
+
+   ```bash
+   bash windows/build-portable.sh
+   ```
+
+   Результат — `windows/dist/Eve's Text/`.
+
+4. Проверьте:
+
+   ```bash
+   "windows/dist/Eve's Text/bin/python.exe" \
+       "windows/dist/Eve's Text/app/check_runtime.py"
+   ```
+
+5. Установщик (по желанию, нужен [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
+
+   ```bat
+   ISCC.exe /DMyAppVersion=0.6.0 windows\eves-text.iss
+   ```
+
+   Готовый файл — `windows\dist-installer\EvesText-<версия>-win64-setup.exe`.
+
+Иконка установщика и ярлыков — `windows/assets/eves-text.ico` (7 размеров,
+16–256 px), собирается из `eves_text/resources/eves-text.svg`.
+
+## Если что-то не работает
+
+- **Окно не появляется.** Запустите `eves-text.bat` и посмотрите вывод;
+  полный стек — в `%LOCALAPPDATA%\Eve's Text\crash.log`.
+- **Нет подчёркивания орфографии.** Запустите `check_runtime.py`: он покажет,
+  найден ли словарь `ru_RU`. Проверьте, что папка `share\hunspell` не пуста.
+- **Кривые шрифты или квадратики.** Убедитесь, что `etc\fonts\fonts.conf`
+  на месте; fontconfig берёт шрифты из `%WINDIR%\Fonts`.
+- **ИИ не отвечает.** Проверьте, что Ollama запущена: откройте
+  `http://localhost:11434` в браузере, и что модель скачана.
+- **Антивирус ругается на python.exe.** Это обычный интерпретатор из MSYS2;
+  сборка не подписана. Можно запускать портативную версию из папки,
+  добавленной в исключения.
+
+## Лицензии
+
+Код Eve's Text — MIT. GTK, GtkSourceView, gspell, enchant, Python и MSYS2
+поставляются под своими лицензиями (LGPL и др.), их тексты лежат в
+`share\licenses` и `LICENSE`. Словари: `ru_RU` — MPL-2.0, `en_US` — SCOWL;
+уведомление — `share\hunspell\LICENSE.txt`.
