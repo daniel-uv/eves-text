@@ -1643,7 +1643,8 @@ class MainWindow(Gtk.ApplicationWindow):
         dialog.set_version(__version__)
         dialog.set_comments(
             "Простой текстовый редактор с проверкой орфографии.\n"
-            "Следующий шаг — ИИ-проверка грамматики и пунктуации."
+            "Есть проверка с ИИ через Ollama: выделите текст, правый клик →\n"
+            "«Проверить с ИИ». Модель скачивается вручную в меню «ИИ»."
         )
         dialog.set_icon_name(self._icon_name)
         dialog.set_license_type(Gtk.License.MIT_X11)

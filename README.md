@@ -1,7 +1,8 @@
 # Eve's Text
 
 Eve's Text — простой текстовый редактор для Linux и Windows (GTK 3 + GtkSourceView 4 + gspell).
-База для будущей ИИ-проверки грамматики и пунктуации на русском.
+Текстовый редактор для русского языка с проверкой орфографии и проверкой с ИИ
+через Ollama.
 
 ## Windows 11
 
@@ -48,8 +49,8 @@ python3 -m eves_text --version
 ## Сборка и установка .deb
 
 ```bash
-./packaging/build-deb.sh                 # -> dist/eves-text_0.6.4-1_all.deb
-sudo dpkg -i dist/eves-text_0.6.4-1_all.deb
+./packaging/build-deb.sh                 # -> dist/eves-text_0.6.5-1_all.deb
+sudo dpkg -i dist/eves-text_0.6.5-1_all.deb
 eves-text                                # или из меню «Eve's Text»
 ```
 
@@ -64,9 +65,9 @@ MAINTAINER="Имя <mail@example.org>" ./packaging/build-deb.sh
 Проверить пакет без установки:
 
 ```bash
-dpkg-deb --info dist/eves-text_0.6.4-1_all.deb
-dpkg-deb -c dist/eves-text_0.6.4-1_all.deb
-dpkg-deb -x dist/eves-text_0.6.4-1_all.deb /tmp/eves-text-root
+dpkg-deb --info dist/eves-text_0.6.5-1_all.deb
+dpkg-deb -c dist/eves-text_0.6.5-1_all.deb
+dpkg-deb -x dist/eves-text_0.6.5-1_all.deb /tmp/eves-text-root
 /tmp/eves-text-root/usr/lib/eves-text/eves-text --version
 ```
 
