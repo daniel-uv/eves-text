@@ -48,8 +48,8 @@ python3 -m eves_text --version
 ## Сборка и установка .deb
 
 ```bash
-./packaging/build-deb.sh                 # -> dist/eves-text_0.6.2-1_all.deb
-sudo dpkg -i dist/eves-text_0.6.2-1_all.deb
+./packaging/build-deb.sh                 # -> dist/eves-text_0.6.3-1_all.deb
+sudo dpkg -i dist/eves-text_0.6.3-1_all.deb
 eves-text                                # или из меню «Eve's Text»
 ```
 
@@ -64,9 +64,9 @@ MAINTAINER="Имя <mail@example.org>" ./packaging/build-deb.sh
 Проверить пакет без установки:
 
 ```bash
-dpkg-deb --info dist/eves-text_0.6.2-1_all.deb
-dpkg-deb -c dist/eves-text_0.6.2-1_all.deb
-dpkg-deb -x dist/eves-text_0.6.2-1_all.deb /tmp/eves-text-root
+dpkg-deb --info dist/eves-text_0.6.3-1_all.deb
+dpkg-deb -c dist/eves-text_0.6.3-1_all.deb
+dpkg-deb -x dist/eves-text_0.6.3-1_all.deb /tmp/eves-text-root
 /tmp/eves-text-root/usr/lib/eves-text/eves-text --version
 ```
 
@@ -180,10 +180,12 @@ Ollama и её модели не меняются. Прогресс виден �
 - Linux: `~/.config/eves-text/settings.json`
 - Windows: `%APPDATA%\Eve's Text\settings.json`
 
-Пункт **«ИИ» → «Папка моделей…»** меняет папку. Если папка не выбрана
-(пункт **«ИИ» → «Использовать системную Ollama»**), приложение работает через
-системную службу на `http://127.0.0.1:11434`; модель тогда можно поставить
-вручную:
+Пункт **«ИИ» → «Папка моделей…»** открывает окно выбора папки: выбранная
+папка создаётся при необходимости и запоминается. Пункт
+**«ИИ» → «Открыть папку моделей»** показывает её в файловом менеджере. Если
+папка не выбрана (пункт **«ИИ» → «Использовать системную Ollama»**), приложение
+работает через системную службу на `http://127.0.0.1:11434`; модель тогда можно
+поставить вручную:
 
 ```bash
 ollama pull qwen2.5:7b-instruct

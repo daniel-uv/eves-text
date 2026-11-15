@@ -319,6 +319,9 @@ class MainWindow(Gtk.ApplicationWindow):
         ai_item.set_submenu(ai_menu)
         ai_menu.append(self._item("_Скачать модель…", "win.ai-download"))
         ai_menu.append(self._item("_Папка моделей…", "win.ai-models-dir"))
+        ai_menu.append(
+            self._item("Открыть папку _моделей", "win.ai-open-folder")
+        )
         ai_menu.append(Gtk.SeparatorMenuItem())
         ai_menu.append(
             self._item("Использовать системную Ollama", "win.ai-system")
@@ -384,6 +387,7 @@ class MainWindow(Gtk.ApplicationWindow):
             ("quit", self.action_quit, ["<Primary>q"]),
             ("ai-download", self.action_ai_download, []),
             ("ai-models-dir", self.action_ai_models_dir, []),
+            ("ai-open-folder", self.action_ai_open_folder, []),
             ("ai-system", self.action_ai_system, []),
         ]
         for name, handler, accels in entries:
@@ -1014,28 +1018,19 @@ class MainWindow(Gtk.ApplicationWindow):
     def _choose_models_folder(
         self, _button: Gtk.Button, entry: Gtk.Entry, parent: Gtk.Window
     ) -> None:
-        chooser = Gtk.FileChooserNative(
-            title="Папка для моделей",
-            transient_for=parent,
-            action=Gtk.FileChooserAction.SELECT_FOLDER,
-            accept_label="Выбрать",
-            cancel_label="Отмена",
+        chooser = Gtk.FileChooserNative.new(
+            "Папка для моделей",
+            parent,
+            Gtk.FileChooserAction.SELECT_FOLDER,
+            "_Выбрать",
+            "_Отмена",
         )
         current = entry.get_text().strip()
         if current:
             path = Path(current).expanduser()
             if path.is_dir():
                 chooser.set_current_folder(str(path))
-        chooser.connect(
-            "response",
-            lambda dlg, response: self._on_folder_chosen(dlg, response, entry),
-        )
-        chooser.show()
-
-    @staticmethod
-    def _on_folder_chosen(
-        chooser: Gtk.FileChooserNative, response: int, entry: Gtk.Entry
-    ) -> None:
+        response = chooser.run()
         filename = chooser.get_filename()
         chooser.destroy()
         if response == Gtk.ResponseType.ACCEPT and filename:
@@ -1053,28 +1048,24 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_message("Дождитесь окончания проверки текста")
             return
 
-        chooser = Gtk.FileChooserNative(
-            title="Папка для моделей Ollama",
-            transient_for=self,
-            action=Gtk.FileChooserAction.SELECT_FOLDER,
-            accept_label="Выбрать",
-            cancel_label="Отмена",
+        chooser = Gtk.FileChooserNative.new(
+            "Папка для моделей Ollama",
+            self,
+            Gtk.FileChooserAction.SELECT_FOLDER,
+            "_Выбрать",
+            "_Отмена",
         )
         current = self._models_dir or str(default_models_dir())
         path = Path(current).expanduser()
         if path.is_dir():
             chooser.set_current_folder(str(path))
-        chooser.connect("response", self._on_models_dir_response)
-        chooser.show()
-
-    def _on_models_dir_response(
-        self, chooser: Gtk.FileChooserNative, response: int
-    ) -> None:
+        response = chooser.run()
         filename = chooser.get_filename()
         chooser.destroy()
-        if response != Gtk.ResponseType.ACCEPT or not filename:
-            return
+        if response == Gtk.ResponseType.ACCEPT and filename:
+            self._apply_models_dir(filename)
 
+    def _apply_models_dir(self, filename: str) -> None:
         path = Path(filename).expanduser()
         try:
             path.mkdir(parents=True, exist_ok=True)
@@ -1094,6 +1085,37 @@ class MainWindow(Gtk.ApplicationWindow):
             "Скачайте модель: меню «ИИ» → «Скачать модель…»",
             seconds=15,
         )
+
+    def action_ai_open_folder(self, *_args) -> None:
+        """Открывает папку с моделями в файловом менеджере."""
+        if not self._models_dir:
+            self._show_notice(
+                "Папка моделей",
+                "Папка не выбрана — используется системная Ollama.\n"
+                "Выберите папку: меню «ИИ» → «Папка моделей…».",
+            )
+            return
+
+        path = Path(self._models_dir).expanduser()
+        if not path.is_dir():
+            self._show_notice(
+                "Папка моделей", f"Папка не найдена:\n{path}"
+            )
+            return
+        try:
+            opened = Gtk.show_uri_on_window(
+                self, path.resolve().as_uri(), Gdk.CURRENT_TIME
+            )
+        except GLib.Error as exc:
+            self._show_notice(
+                "Папка моделей", f"Не удалось открыть папку:\n{exc.message}"
+            )
+            return
+        if not opened:
+            self._show_notice(
+                "Папка моделей",
+                f"Не удалось открыть папку в файловом менеджере:\n{path}",
+            )
 
     def action_ai_system(self, *_args) -> None:
         """Переключает проверку на системную Ollama."""

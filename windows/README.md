@@ -42,9 +42,10 @@
 проверки отдельную службу Ollama. Системная Ollama и её модели не меняются.
 Выбор запоминается в `%APPDATA%\Eve's Text\settings.json`.
 
-Пункт **«ИИ» → «Папка моделей…»** меняет папку, а **«Использовать системную
-Ollama»** переключает проверку на службу `http://localhost:11434`. В этом случае
-модель можно поставить вручную:
+Пункт **«ИИ» → «Папка моделей…»** открывает окно выбора папки, а
+**«Открыть папку моделей»** показывает её в Проводнике. **«Использовать
+системную Ollama»** переключает проверку на службу `http://localhost:11434`.
+В этом случае модель можно поставить вручную:
 
 ```bat
 ollama pull qwen2.5:7b-instruct
@@ -127,7 +128,7 @@ Eve's Text\
 5. Установщик (по желанию, нужен [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
    ```bat
-   ISCC.exe /DMyAppVersion=0.6.2 windows\eves-text.iss
+   ISCC.exe /DMyAppVersion=0.6.3 windows\eves-text.iss
    ```
 
    Готовый файл — `windows\dist-installer\EvesText-<версия>-win64-setup.exe`.
