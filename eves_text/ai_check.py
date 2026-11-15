@@ -32,6 +32,10 @@ class AIError(RuntimeError):
     """Ошибка, текст которой можно показать пользователю."""
 
 
+class AICancelled(AIError):
+    """Длительная операция прервана пользователем (например, скачивание)."""
+
+
 def _post(path: str, payload: dict, timeout: float = TIMEOUT) -> dict:
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
@@ -51,8 +55,9 @@ def _post(path: str, payload: dict, timeout: float = TIMEOUT) -> dict:
             pass
         if exc.code == 404 or "not found" in detail:
             raise AIError(
-                f"Модель «{MODEL_NAME}» не загружена.\n"
-                f"Выполните в терминале: ollama pull {MODEL_NAME}"
+                f"Модель «{MODEL_NAME}» не найдена.\n"
+                f"Скачайте её при следующей проверке текста или выполните "
+                f"в терминале: ollama pull {MODEL_NAME}"
             ) from exc
         raise AIError(f"Ollama вернула ошибку {exc.code}: {detail or exc.reason}") from exc
     except urllib.error.URLError as exc:
@@ -75,14 +80,115 @@ def _get(path: str, timeout: float = 5) -> dict:
         ) from exc
 
 
-def model_installed() -> bool:
-    """Загружена ли нужная модель (быстрая проверка без генерации)."""
+def _model_matches(name: str, model: str) -> bool:
+    """Совпадает ли имя из /api/tags с запрошенной моделью."""
+    if name == model:
+        return True
+    # Ollama дописывает :latest моделям без тега.
+    if ":" not in model:
+        return name == f"{model}:latest"
+    return False
+
+
+def model_state(model: str = MODEL_NAME) -> str:
+    """Состояние модели: «installed», «missing» или «offline».
+
+    «offline» означает, что служба Ollama недоступна: отличить отсутствие
+    модели от незапущенной службы иначе нельзя.
+    """
     try:
         tags = _get("/api/tags")
     except AIError:
+        return "offline"
+    for item in tags.get("models", []):
+        if _model_matches(item.get("name", ""), model):
+            return "installed"
+    return "missing"
+
+
+def model_installed() -> bool:
+    """Загружена ли нужная модель (быстрая проверка без генерации)."""
+    return model_state() == "installed"
+
+
+def pull_model(
+    model: str = MODEL_NAME,
+    on_progress=None,
+    cancel=None,
+) -> bool:
+    """Скачивает модель через /api/pull.
+
+    on_progress(status, completed, total) вызывается по ходу загрузки из
+    потока-вызывающего (в UI его нужно переправлять через GLib.idle_add).
+    ``cancel`` — threading.Event: при установке скачивание прекращается.
+    Возвращает True, если модель действительно скачалась, и False, если
+    она уже была установлена. При отмене бросает AICancelled.
+    """
+    if model_installed():
         return False
-    names = {item.get("name", "") for item in tags.get("models", [])}
-    return MODEL_NAME in names or f"{MODEL_NAME}:latest" in names
+
+    payload = json.dumps({"model": model, "stream": True}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{BASE_URL}/api/pull",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            # Ollama отвечает потоком NDJSON: по одному объекту на строку.
+            for raw in response:
+                if cancel is not None and cancel.is_set():
+                    raise AICancelled("Скачивание модели отменено.")
+                line = raw.decode("utf-8", "replace").strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("error"):
+                    raise AIError(
+                        "Ollama не смогла скачать модель: "
+                        f"{event['error']}"
+                    )
+                if on_progress is not None:
+                    on_progress(
+                        str(event.get("status", "")),
+                        _as_int(event.get("completed")),
+                        _as_int(event.get("total")),
+                    )
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("error", "")
+        except Exception:  # noqa: BLE001 - тело ответа может быть не JSON
+            pass
+        raise AIError(
+            f"Ollama вернула ошибку {exc.code}: {detail or exc.reason}"
+        ) from exc
+    except OSError as exc:
+        raise AIError(
+            "Соединение с Ollama прервалось во время скачивания.\n"
+            "Проверьте, что служба запущена, и попробуйте ещё раз."
+        ) from exc
+
+    if cancel is not None and cancel.is_set():
+        raise AICancelled("Скачивание модели отменено.")
+    if not model_installed():
+        raise AIError(
+            f"Модель «{model}» скачалась, но Ollama её не видит.\n"
+            "Попробуйте ещё раз или выполните: ollama pull " + model
+        )
+    return True
+
+
+def _as_int(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def loaded_size() -> int:

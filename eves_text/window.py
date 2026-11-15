@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from pathlib import Path
 
 import gi
@@ -45,6 +46,39 @@ def _fmt(number: int) -> str:
     return f"{number:,}".replace(",", "\u202f")
 
 
+def _fmt_bytes(value: int) -> str:
+    """Байты -> '4,4 ГБ' для прогресса скачивания модели."""
+    size = float(max(value, 0))
+    for unit in ("Б", "КБ", "МБ", "ГБ"):
+        if size < 1024 or unit == "ГБ":
+            if unit == "Б":
+                return f"{size:.0f} {unit}"
+            return f"{size:.1f} {unit}".replace(".", ",")
+        size /= 1024
+    return f"{size:.1f} ГБ"
+
+
+# Статусы Ollama при скачивании модели -> подписи для человека.
+PULL_STATUSES = {
+    "pulling manifest": "Получаю описание модели…",
+    "verifying sha256 digest": "Проверяю контрольную сумму…",
+    "writing manifest": "Завершаю установку…",
+    "removing any unused layers": "Удаляю неиспользуемые слои…",
+    "success": "Готово",
+}
+
+
+def pull_status_text(status: str) -> str:
+    """Переводит статус /api/pull на русский."""
+    if status in PULL_STATUSES:
+        return PULL_STATUSES[status]
+    if status.startswith("pulling "):
+        return "Скачиваю модель…"
+    if status.startswith("verifying "):
+        return "Проверяю контрольную сумму…"
+    return status or "Скачиваю модель…"
+
+
 def app_icon_name() -> str:
     """Иконка приложения, если она установлена, иначе системная заглушка."""
     theme = Gtk.IconTheme.get_default()
@@ -64,6 +98,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self._ai_busy = False
         self._ai_enabled = True
         self._ai_unloading = False
+        self._ai_pulling = False
+        self._ai_pull_cancel: threading.Event | None = None
+        self._ai_pull_dialog = None
+        self._ai_pull_progress = None
+        self._ai_pull_title = None
+        self._ai_pull_detail = None
+        self._ai_pull_status = ""
+        self._ai_pull_last_update = 0.0
         self._message_timeout = 0
 
         self.set_default_size(1000, 700)
@@ -645,7 +687,9 @@ class MainWindow(Gtk.ApplicationWindow):
         else:
             self._ai_enabled = True
             self._update_ai_button()
-            self._show_message("ИИ включён. Модель загрузится при первой проверке.")
+            self._show_message(
+                "ИИ включён. Если модели нет, приложение предложит её скачать."
+            )
 
     def _ai_unload_worker(self) -> None:
         freed = 0
@@ -698,14 +742,263 @@ class MainWindow(Gtk.ApplicationWindow):
             return
 
         self._ai_busy = True
+        self._show_message("Проверяю готовность ИИ…", seconds=0)
+        threading.Thread(
+            target=self._ai_probe_worker,
+            args=(text, start.get_offset()),
+            daemon=True,
+        ).start()
+
+    # Модель может быть ещё не скачана. Перед проверкой узнаём её состояние
+    # в фоне, чтобы не подвешивать окно, и при необходимости предлагаем
+    # скачать модель прямо из приложения.
+
+    def _ai_probe_worker(self, text: str, offset: int) -> None:
+        state = "offline"
+        error: str | None = None
+        try:
+            state = ai_check.model_state()
+        except Exception as exc:  # noqa: BLE001 - поток не должен падать молча
+            error = f"Неожиданная ошибка: {exc}"
+        GLib.idle_add(self._ai_probe_finished, text, offset, state, error)
+
+    def _ai_probe_finished(
+        self, text: str, offset: int, state: str, error: str | None
+    ) -> bool:
+        if not self.get_realized():
+            return False
+
+        if error is not None:
+            self._ai_busy = False
+            self._show_message("ИИ не смог проверить текст", seconds=10)
+            self._show_ai_error(error)
+            return False
+
+        if state == "offline":
+            self._ai_busy = False
+            self._show_message("Ollama не запущена", seconds=10)
+            self._show_ai_error(
+                "Не удалось подключиться к Ollama.\n"
+                "Проверьте, что служба запущена: systemctl status ollama"
+            )
+            return False
+
+        if state == "missing":
+            self._ask_download_model(text, offset)
+            return False
+
         self._show_message(
             f"Проверяю текст с ИИ (модель {ai_check.MODEL_NAME})…", seconds=0
         )
         threading.Thread(
-            target=self._ai_worker,
-            args=(text, start.get_offset()),
-            daemon=True,
+            target=self._ai_worker, args=(text, offset), daemon=True
         ).start()
+        return False
+
+    def _ask_download_model(self, text: str, offset: int) -> None:
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.NONE,
+            text="Модель для ИИ не найдена",
+        )
+        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Скачать", Gtk.ResponseType.YES)
+        dialog.set_default_response(Gtk.ResponseType.YES)
+        dialog.format_secondary_text(
+            f"Для проверки текста нужна модель «{ai_check.MODEL_NAME}», "
+            "но её ещё нет на этом компьютере.\n\n"
+            "Скачать сейчас? Это может занять несколько минут и потребовать "
+            "несколько гигабайт свободного места. Скачивание можно отменить."
+        )
+        dialog.connect(
+            "response", self._on_download_response, text, offset
+        )
+        dialog.show()
+
+    def _on_download_response(
+        self, dialog: Gtk.MessageDialog, response: int, text: str, offset: int
+    ) -> None:
+        dialog.destroy()
+        if response != Gtk.ResponseType.YES:
+            self._ai_busy = False
+            self._show_message(
+                "Проверка отменена: модель не скачана", seconds=10
+            )
+            return
+        self._start_model_pull(text, offset)
+
+    def _start_model_pull(self, text: str, offset: int) -> None:
+        if self._ai_pulling:
+            return
+        self._ai_pulling = True
+        self._ai_pull_cancel = threading.Event()
+        self._ai_pull_status = ""
+        self._ai_pull_last_update = 0.0
+        self._build_pull_dialog()
+        threading.Thread(
+            target=self._ai_pull_worker, args=(text, offset), daemon=True
+        ).start()
+
+    def _build_pull_dialog(self) -> None:
+        dialog = Gtk.Dialog(
+            title="Скачивание модели",
+            transient_for=self,
+            modal=True,
+        )
+        dialog.set_default_size(520, -1)
+        dialog.set_resizable(False)
+        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
+        dialog.set_default_response(Gtk.ResponseType.CANCEL)
+        dialog.connect("response", self._on_pull_cancel)
+
+        content = dialog.get_content_area()
+        content.set_border_width(16)
+        content.set_spacing(10)
+
+        header = Gtk.Label()
+        header.set_markup(
+            "Скачиваю модель <b>"
+            f"{GLib.markup_escape_text(ai_check.MODEL_NAME)}</b>"
+        )
+        header.set_xalign(0.0)
+        header.set_line_wrap(True)
+        content.pack_start(header, False, False, 0)
+
+        self._ai_pull_title = Gtk.Label(label="Подключаюсь к Ollama…")
+        self._ai_pull_title.set_xalign(0.0)
+        self._ai_pull_title.set_line_wrap(True)
+        content.pack_start(self._ai_pull_title, False, False, 0)
+
+        self._ai_pull_progress = Gtk.ProgressBar()
+        self._ai_pull_progress.set_show_text(True)
+        content.pack_start(self._ai_pull_progress, False, False, 0)
+
+        self._ai_pull_detail = Gtk.Label(
+            label="Скачивание можно отменить — загруженные части сохранятся."
+        )
+        self._ai_pull_detail.set_xalign(0.0)
+        self._ai_pull_detail.set_line_wrap(True)
+        self._ai_pull_detail.get_style_context().add_class("dim-label")
+        content.pack_start(self._ai_pull_detail, False, False, 0)
+
+        self._ai_pull_dialog = dialog
+        dialog.show_all()
+
+    def _on_pull_cancel(
+        self, dialog: Gtk.Dialog, response: int
+    ) -> None:
+        if response not in (Gtk.ResponseType.CANCEL, Gtk.ResponseType.DELETE_EVENT):
+            return
+        if self._ai_pull_cancel is not None:
+            self._ai_pull_cancel.set()
+        area = dialog.get_action_area()
+        if area is not None:
+            for child in area.get_children():
+                child.set_sensitive(False)
+        if self._ai_pull_title is not None:
+            self._ai_pull_title.set_text("Отменяю скачивание…")
+
+    def _ai_pull_progress_cb(
+        self, status: str, completed: int, total: int
+    ) -> None:
+        """Вызывается из фонового потока: не чаще 4 раз в секунду."""
+        now = time.monotonic()
+        if status == self._ai_pull_status and now - self._ai_pull_last_update < 0.25:
+            return
+        self._ai_pull_status = status
+        self._ai_pull_last_update = now
+        GLib.idle_add(self._ai_pull_progress_update, status, completed, total)
+
+    def _ai_pull_progress_update(
+        self, status: str, completed: int, total: int
+    ) -> bool:
+        if not self.get_realized() or self._ai_pull_progress is None:
+            return False
+
+        if self._ai_pull_title is not None:
+            self._ai_pull_title.set_text(pull_status_text(status))
+
+        if total > 0:
+            fraction = min(completed / total, 1.0)
+            self._ai_pull_progress.set_fraction(fraction)
+            self._ai_pull_progress.set_text(
+                f"{_fmt_bytes(completed)} из {_fmt_bytes(total)} · "
+                f"{fraction * 100:.0f} %"
+            )
+        else:
+            self._ai_pull_progress.pulse()
+            self._ai_pull_progress.set_text("")
+        return False
+
+    def _ai_pull_worker(self, text: str, offset: int) -> None:
+        downloaded = False
+        cancelled = False
+        error: str | None = None
+        try:
+            downloaded = ai_check.pull_model(
+                on_progress=self._ai_pull_progress_cb,
+                cancel=self._ai_pull_cancel,
+            )
+        except ai_check.AICancelled as exc:
+            cancelled = True
+            error = str(exc)
+        except ai_check.AIError as exc:
+            error = str(exc)
+        except Exception as exc:  # noqa: BLE001 - поток не должен падать молча
+            error = f"Неожиданная ошибка: {exc}"
+        GLib.idle_add(
+            self._ai_pull_finished, downloaded, cancelled, error, text, offset
+        )
+
+    def _ai_pull_finished(
+        self,
+        downloaded: bool,
+        cancelled: bool,
+        error: str | None,
+        text: str,
+        offset: int,
+    ) -> bool:
+        self._ai_pulling = False
+        self._ai_pull_cancel = None
+
+        dialog = self._ai_pull_dialog
+        self._ai_pull_dialog = None
+        self._ai_pull_progress = None
+        self._ai_pull_title = None
+        self._ai_pull_detail = None
+        if dialog is not None:
+            dialog.destroy()
+
+        if not self.get_realized():
+            return False
+
+        if cancelled:
+            self._ai_busy = False
+            self._show_message("Скачивание модели отменено", seconds=10)
+            return False
+
+        if error is not None:
+            self._ai_busy = False
+            self._show_message("Не удалось скачать модель", seconds=10)
+            self._show_ai_error(error)
+            return False
+
+        if downloaded:
+            self._show_message(
+                f"Модель {ai_check.MODEL_NAME} скачана. Проверяю текст…",
+                seconds=0,
+            )
+        else:
+            self._show_message(
+                f"Модель {ai_check.MODEL_NAME} уже скачана. Проверяю текст…",
+                seconds=0,
+            )
+        threading.Thread(
+            target=self._ai_worker, args=(text, offset), daemon=True
+        ).start()
+        return False
 
     def _ai_worker(self, text: str, offset: int) -> None:
         corrected: str | None = None
