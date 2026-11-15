@@ -159,10 +159,23 @@ def main() -> int:
         loaders_dir = base / "lib" / "gdk-pixbuf-2.0" / "2.10.0" / "loaders"
         svg = loaders_dir / "pixbufloader_svg.dll"
         exe = base / "bin" / "gdk-pixbuf-query-loaders.exe"
+        cache_file = os.environ.get("GDK_PIXBUF_MODULE_FILE")
+        cache_text = ""
+        if cache_file:
+            try:
+                cache_text = Path(cache_file).read_text(
+                    encoding="utf-8", errors="replace"
+                )
+            except OSError:
+                pass
         formats = sorted({item.get_name() for item in GdkPixbuf.Pixbuf.get_formats()})
         if "svg" in formats:
             return f"svg есть, форматов: {len(formats)}"
-        detail = f"svg-загрузчик: {svg.is_file()}, форматов: {len(formats)}"
+        detail = (
+            f"svg-загрузчик: {svg.is_file()}, форматов: {len(formats)}, "
+            f"кэш: {cache_file}, svg в кэше: {'svg' in cache_text}, "
+            f"размер кэша: {len(cache_text)}"
+        )
         if exe.is_file() and svg.is_file():
             import subprocess
 
@@ -174,9 +187,11 @@ def main() -> int:
                 errors="replace",
                 check=False,
             )
+            out = result.stdout or ""
             detail += (
                 f"; query-loaders: код {result.returncode}, "
-                f"stderr: {(result.stderr or '').strip()[:400]!r}"
+                f"stdout {len(out)} байт, svg в выводе: {'svg' in out}, "
+                f"stderr: {(result.stderr or '').strip()[:300]!r}"
             )
         raise RuntimeError(detail)
 
