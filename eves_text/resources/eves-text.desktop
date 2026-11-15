@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Eve's Text
+Name[en]=Eve's Text
+GenericName=Текстовый редактор
+GenericName[en]=Text Editor
+Comment=Текстовый редактор с проверкой орфографии и ИИ-проверкой
+Comment[en]=Text editor with spelling and AI grammar checking
+Exec=eves-text %F
+Icon=eves-text
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/plain;
+StartupNotify=true

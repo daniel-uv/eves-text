@@ -1,0 +1,21 @@
+Package: eves-text
+Version: @VERSION@
+Architecture: all
+Maintainer: @MAINTAINER@
+Installed-Size: @INSTALLED_SIZE@
+Depends: python3 (>= 3.8), python3-gi, gir1.2-gtk-3.0, gir1.2-gtksource-4, gir1.2-gspell-1
+Recommends: hunspell-ru
+Section: editors
+Priority: optional
+Description: Eve's Text — текстовый редактор с проверкой орфографии
+ Простой текстовый редактор для русского языка на GTK 3.
+ .
+ Возможности: открытие и сохранение файлов в UTF-8 и CP1251,
+ проверка орфографии через gspell, проверка с ИИ через Ollama
+ (правый клик по выделенному тексту), номера строк (по умолчанию выключены),
+ поля вокруг текста, перенос строк,
+ нижняя панель с размером шрифта и выравниванием абзацев,
+ табуляция, статистика слов и символов,
+ автоматическая светлая и тёмная тема.
+ .
+ Проект задуман как база для ИИ-проверки грамматики и пунктуации.
