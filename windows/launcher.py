@@ -63,12 +63,16 @@ def make_cache(
     except (OSError, subprocess.SubprocessError):
         return None
 
-    output = (result.stdout or "").strip()
-    if result.returncode != 0 or not output:
+    output = result.stdout or ""
+    if result.returncode != 0 or not output.strip():
         return None
+    # Парсер gdk-pixbuf добавляет модуль в список только после пустой строки.
+    # Если обрезать хвост, последний загрузчик (pixbufloader_svg) потеряется.
+    if not output.endswith("\n\n"):
+        output = output.rstrip("\n") + "\n\n"
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(output + "\n", encoding="utf-8")
+        target.write_text(output, encoding="utf-8")
     except OSError:
         return None
     return target
