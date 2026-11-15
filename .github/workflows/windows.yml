@@ -58,6 +58,26 @@ jobs:
         run: |
           & "windows\dist\Eve's Text\bin\python.exe" "windows\dist\Eve's Text\app\check_runtime.py"
 
+      - name: Диагностика бандла
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "--- иконки ---"
+          Get-ChildItem "windows\dist\Eve's Text\share\icons\hicolor" -Recurse -File |
+            Where-Object Name -Like "eves-text*" | Select-Object FullName, Length
+          Write-Host "--- загрузчики gdk-pixbuf ---"
+          Get-ChildItem "windows\dist\Eve's Text\lib\gdk-pixbuf-2.0\2.10.0\loaders" |
+            Select-Object Name
+          $cache = "$env:LOCALAPPDATA\Eve's Text\cache\loaders.cache"
+          if (Test-Path $cache) {
+            Write-Host "--- кэш: $cache ---"
+            Get-Content $cache | Select-String -Pattern "pixbufloader|loaders/"
+          } else {
+            Write-Host "кэш не создан: $cache"
+          }
+          Write-Host "--- схемы ---"
+          Get-ChildItem "windows\dist\Eve's Text\share\glib-2.0\schemas" | Select-Object Name
+
       - name: Проверить окно
         shell: pwsh
         run: |
