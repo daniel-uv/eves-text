@@ -317,10 +317,12 @@ class MainWindow(Gtk.ApplicationWindow):
         ai_item = Gtk.MenuItem.new_with_mnemonic("_ИИ")
         ai_menu = Gtk.Menu()
         ai_item.set_submenu(ai_menu)
-        ai_menu.append(self._item("_Скачать модель…", "win.ai-download"))
-        ai_menu.append(self._item("_Папка моделей…", "win.ai-models-dir"))
+        ai_menu.append(self._item("_Скачать модель", "win.ai-download"))
         ai_menu.append(
-            self._item("Открыть папку _моделей", "win.ai-open-folder")
+            self._item("Указать _папку для моделей", "win.ai-models-dir")
+        )
+        ai_menu.append(
+            self._item("Открыть папку _с моделями", "win.ai-open-folder")
         )
         ai_menu.append(Gtk.SeparatorMenuItem())
         ai_menu.append(
@@ -731,7 +733,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._update_ai_button()
             self._show_message(
                 "ИИ включён. Модель загрузится при первой проверке; "
-                "скачать её можно в меню «ИИ» → «Скачать модель…»."
+                "скачать её можно в меню «ИИ» → «Скачать модель»."
             )
 
     def _ai_unload_worker(self) -> None:
@@ -867,7 +869,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 details = (
                     "Не удалось подключиться к Ollama.\n"
                     "Запустите службу Ollama или выберите отдельную папку "
-                    "моделей: меню «ИИ» → «Папка моделей…»."
+                    "моделей: меню «ИИ» → «Указать папку для моделей»."
                 )
             self._show_notice("ИИ недоступен", details)
             return False
@@ -876,7 +878,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._ai_busy = False
             self._show_message(
                 f"Модель «{self._model_name}» не скачана. "
-                "Меню «ИИ» → «Скачать модель…»",
+                "Меню «ИИ» → «Скачать модель»",
                 seconds=15,
             )
             return False
@@ -1082,7 +1084,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._managed_ollama.stop()
         self._show_message(
             f"Папка моделей: {path}. "
-            "Скачайте модель: меню «ИИ» → «Скачать модель…»",
+            "Скачайте модель: меню «ИИ» → «Скачать модель»",
             seconds=15,
         )
 
@@ -1092,7 +1094,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_notice(
                 "Папка моделей",
                 "Папка не выбрана — используется системная Ollama.\n"
-                "Выберите папку: меню «ИИ» → «Папка моделей…».",
+                "Выберите папку: меню «ИИ» → «Указать папку для моделей».",
             )
             return
 

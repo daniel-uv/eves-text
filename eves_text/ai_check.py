@@ -69,7 +69,7 @@ def _post(path: str, payload: dict, timeout: float = TIMEOUT) -> dict:
         if exc.code == 404 or "not found" in detail:
             raise AIError(
                 f"Модель «{MODEL_NAME}» не найдена.\n"
-                "Скачайте её вручную: меню «ИИ» → «Скачать модель…»."
+                "Скачайте её вручную: меню «ИИ» → «Скачать модель»."
             ) from exc
         raise AIError(f"Ollama вернула ошибку {exc.code}: {detail or exc.reason}") from exc
     except urllib.error.URLError as exc:
