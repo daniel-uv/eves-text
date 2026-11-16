@@ -258,6 +258,12 @@ def test_linux_installer() -> None:
         calls: list[tuple] = []
 
         def fake_run(command, **kwargs):
+            env = kwargs.get("env")
+            if env is not None:
+                askpass = Path(env["SUDO_ASKPASS"])
+                assert askpass.is_file()
+                assert askpass.stat().st_mode & 0o111
+                assert "zenity" in askpass.read_text(encoding="utf-8")
             calls.append((command, kwargs))
             return SimpleNamespace(returncode=0, stdout="")
 
@@ -280,18 +286,42 @@ def test_linux_installer() -> None:
         assert ok and error == "", (ok, error)
         command, kwargs = calls[0]
         assert command == [
-            "/usr/bin/pkexec",
+            "/usr/bin/sudo",
+            "-A",
             "/usr/bin/dpkg",
             "-i",
             str(deb),
         ], command
         assert kwargs["timeout"] == 300
+        assert kwargs["env"]["SUDO_ASKPASS"].endswith("askpass.sh")
 
-        # Без pkexec остаётся понятная подсказка про ручную установку.
+        # Без sudo остаётся pkexec.
         try:
             updates.subprocess = fake_subprocess
             updates.shutil.which = (
-                lambda name: None if name == "pkexec" else f"/usr/bin/{name}"
+                lambda name: None if name == "sudo" else f"/usr/bin/{name}"
+            )
+            ok, error = updates.launch_linux_installer(deb)
+        finally:
+            updates.subprocess = original_subprocess
+            updates.shutil.which = original_which
+
+        assert ok and error == "", (ok, error)
+        command, _kwargs = calls[1]
+        assert command == [
+            "/usr/bin/pkexec",
+            "/usr/bin/dpkg",
+            "-i",
+            str(deb),
+        ], command
+
+        # Без sudo (с askpass) и pkexec — понятная подсказка.
+        try:
+            updates.subprocess = fake_subprocess
+            updates.shutil.which = (
+                lambda name: f"/usr/bin/{name}"
+                if name == "dpkg"
+                else None
             )
             ok, error = updates.launch_linux_installer(deb)
         finally:

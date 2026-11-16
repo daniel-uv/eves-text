@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -201,11 +203,77 @@ def launch_windows_installer(path: Path) -> tuple[bool, str]:
     return False, f"Не удалось запустить установщик (код {code})."
 
 
-def launch_linux_installer(path: Path) -> tuple[bool, str]:
-    """Устанавливает скачанный ``.deb`` через pkexec.
+# Программы, которые умеют показать графический запрос пароля.
+_ASKPASS_PROGRAMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("zenity", ("--password", "--title=Eve's Text")),
+    ("yad", ("--title=Eve's Text", "--password")),
+    ("kdialog", ("--password", "Eve's Text")),
+    ("x11-ssh-askpass", ("Eve's Text",)),
+)
 
-    pkexec показывает системный запрос пароля администратора. Функция
-    ждёт завершения dpkg, поэтому вызывается из фонового потока.
+
+def _askpass_command() -> list[str] | None:
+    for program, arguments in _ASKPASS_PROGRAMS:
+        path = shutil.which(program)
+        if path is not None:
+            return [path, *arguments]
+    return None
+
+
+def _install_failure(result: subprocess.CompletedProcess, tool: str) -> str:
+    output = (result.stdout or "").strip()
+    if result.returncode in (126, 127):
+        return "Установка отменена: не удалось подтвердить права администратора."
+    message = f"{tool} завершился с кодом {result.returncode}."
+    if output:
+        message += "\n\n" + output[-1200:]
+    return message
+
+
+def _run_installer(command: list[str], env: dict | None = None) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=300,
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Установка не завершилась за 5 минут и была прервана."
+    except OSError as exc:
+        return False, f"Не удалось запустить установку:\n{exc}"
+    if result.returncode == 0:
+        return True, ""
+    return False, _install_failure(result, "dpkg")
+
+
+def _install_with_sudo(path: Path, dpkg: str) -> tuple[bool, str] | None:
+    """Установка через sudo с графическим askpass; None — способ недоступен."""
+    sudo = shutil.which("sudo")
+    askpass = _askpass_command()
+    if sudo is None or askpass is None:
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="eves-text-update-") as tmp:
+        script = Path(tmp) / "askpass.sh"
+        script.write_text(
+            "#!/bin/sh\nexec " + shlex.join(askpass) + "\n", encoding="utf-8"
+        )
+        script.chmod(0o700)
+        env = os.environ.copy()
+        env["SUDO_ASKPASS"] = str(script)
+        return _run_installer([sudo, "-A", dpkg, "-i", str(path)], env)
+
+
+def launch_linux_installer(path: Path) -> tuple[bool, str]:
+    """Устанавливает скачанный ``.deb`` с правами администратора.
+
+    Сначала пробуем sudo с графическим askpass (zenity и родственные),
+    затем pkexec. Функция ждёт завершения dpkg, поэтому вызывается из
+    фонового потока.
     """
     if platform_kind() != "linux":
         return False, "Автоматическая установка доступна только в Linux."
@@ -213,13 +281,6 @@ def launch_linux_installer(path: Path) -> tuple[bool, str]:
     if not path.is_file():
         return False, f"Файл обновления не найден:\n{path}"
 
-    pkexec = shutil.which("pkexec")
-    if pkexec is None:
-        return False, (
-            "Не найден pkexec (PolicyKit), поэтому автоматическая установка "
-            "недоступна. Установите обновление вручную:\n"
-            f"sudo dpkg -i «{path}»"
-        )
     dpkg = shutil.which("dpkg")
     if dpkg is None:
         return False, (
@@ -227,30 +288,23 @@ def launch_linux_installer(path: Path) -> tuple[bool, str]:
             f"Откройте пакет вручную:\n{path}"
         )
 
-    try:
-        result = subprocess.run(
-            [pkexec, dpkg, "-i", str(path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=300,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return False, "Установка не завершилась за 5 минут и была прервана."
-    except OSError as exc:
-        return False, f"Не удалось запустить установку:\n{exc}"
+    result = _install_with_sudo(path, dpkg)
+    if result is not None:
+        return result
 
-    if result.returncode == 0:
-        return True, ""
+    pkexec = shutil.which("pkexec")
+    if pkexec is not None:
+        return _run_installer([pkexec, dpkg, "-i", str(path)])
 
-    output = (result.stdout or "").strip()
-    if result.returncode in (126, 127):
-        return False, "Установка отменена: не удалось подтвердить права администратора."
-    message = f"dpkg завершился с кодом {result.returncode}."
-    if output:
-        message += "\n\n" + output[-1200:]
-    return False, message
+    return False, (
+        "Не найдены sudo с графическим запросом пароля или pkexec (PolicyKit), "
+        "поэтому автоматическая установка недоступна. Установите обновление "
+        f"вручную:\n{sudo_command(path)}"
+    )
+
+
+def sudo_command(path: Path) -> str:
+    return f"sudo dpkg -i «{path}»"
 
 
 def restart_after_exit() -> tuple[bool, str]:
