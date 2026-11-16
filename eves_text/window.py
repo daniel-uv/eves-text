@@ -1706,9 +1706,16 @@ class MainWindow(Gtk.ApplicationWindow):
                 "dark" in theme
             )
         self._dark_theme = dark
-        scheme_id = "oblivion" if dark else "kate"
         manager = GtkSource.StyleSchemeManager.get_default()
-        scheme = manager.get_scheme(scheme_id) or manager.get_scheme("classic")
+        # Своя тёмная схема: нейтральный серый фон вместо зеленоватого oblivion.
+        styles_dir = str(Path(__file__).parent / "resources" / "styles")
+        if styles_dir not in manager.get_search_path():
+            manager.append_search_path(styles_dir)
+        scheme_id = "eves-dark" if dark else "kate"
+        scheme = manager.get_scheme(scheme_id)
+        if scheme is None:
+            fallback = "oblivion" if dark else "classic"
+            scheme = manager.get_scheme(fallback)
         if scheme is not None:
             self.buffer.set_style_scheme(scheme)
         self._apply_windows_titlebar()

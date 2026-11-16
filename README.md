@@ -16,7 +16,8 @@ Eve's Text — простой текстовый редактор для Linux �
 
 - Новый / открыть / сохранить / сохранить как, подтверждение несохранённых правок
 - Чтение UTF-8 и CP1251 (старые русские файлы), запись всегда в UTF-8, атомарно
-- Автоматическое определение светлой/тёмной темы и схемы подсветки
+- Автоматическое определение светлой/тёмной темы и схемы подсветки;
+  в тёмной теме фон поля ввода — нейтральный серый
 - В Windows 11 заголовок окна и диалогов тоже становится тёмным при тёмной теме
 - В Windows каретка мигает и рисуется без лишнего светлого пикселя на конце
 - Номера строк (по умолчанию выключены), подсветка текущей строки, перенос строк
@@ -53,8 +54,8 @@ python3 -m eves_text --version
 ## Сборка и установка .deb
 
 ```bash
-./packaging/build-deb.sh                 # -> dist/eves-text_0.6.12-1_all.deb
-sudo dpkg -i dist/eves-text_0.6.12-1_all.deb
+./packaging/build-deb.sh                 # -> dist/eves-text_0.6.13-1_all.deb
+sudo dpkg -i dist/eves-text_0.6.13-1_all.deb
 eves-text                                # или из меню «Eve's Text»
 ```
 
@@ -69,9 +70,9 @@ MAINTAINER="Имя <mail@example.org>" ./packaging/build-deb.sh
 Проверить пакет без установки:
 
 ```bash
-dpkg-deb --info dist/eves-text_0.6.12-1_all.deb
-dpkg-deb -c dist/eves-text_0.6.12-1_all.deb
-dpkg-deb -x dist/eves-text_0.6.12-1_all.deb /tmp/eves-text-root
+dpkg-deb --info dist/eves-text_0.6.13-1_all.deb
+dpkg-deb -c dist/eves-text_0.6.13-1_all.deb
+dpkg-deb -x dist/eves-text_0.6.13-1_all.deb /tmp/eves-text-root
 /tmp/eves-text-root/usr/lib/eves-text/eves-text --version
 ```
 
@@ -133,7 +134,7 @@ eves-text/
 │   ├── updates.py             проверка релизов GitHub и скачивание (без GTK)
 │   ├── win_theme.py           тёмный заголовок окна в Windows (без GTK)
 │   ├── document.py            чтение/запись файлов и статистика (без GTK)
-│   └── resources/             style.css, eves-text.desktop
+│   └── resources/             style.css, eves-dark.xml, иконки, .desktop
 ├── packaging/
 │   ├── build-deb.sh           сборка пакета через dpkg-deb (без debhelper)
 │   ├── control.in             шаблон метаданных

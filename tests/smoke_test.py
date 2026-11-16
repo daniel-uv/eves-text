@@ -14,7 +14,7 @@ import gi  # noqa: E402
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkSource", "4")
-from gi.repository import Gio, Gtk  # noqa: E402
+from gi.repository import Gio, Gtk, GtkSource  # noqa: E402
 
 Gtk.init_check(None)
 
@@ -193,6 +193,24 @@ def test_caret_blinker() -> None:
     blinker.stop()
     assert blinker._timeout == 0
     window.destroy()
+
+
+def test_dark_scheme() -> None:
+    manager = GtkSource.StyleSchemeManager.get_default()
+    styles_dir = str(ROOT / "eves_text" / "resources" / "styles")
+    if styles_dir not in manager.get_search_path():
+        manager.append_search_path(styles_dir)
+
+    scheme = manager.get_scheme("eves-dark")
+    assert scheme is not None
+
+    text = scheme.get_style("text")
+    assert text is not None
+    assert text.get_property("background") == "#2b2b2b"
+
+    current = scheme.get_style("current-line")
+    assert current is not None
+    assert current.get_property("background") == "#4a4a4a"
 
 
 def test_windows_installer() -> None:
@@ -404,6 +422,7 @@ if __name__ == "__main__":
     test_updates()
     test_win_theme()
     test_caret_blinker()
+    test_dark_scheme()
     test_windows_installer()
     test_linux_installer()
     test_linux_restart()
