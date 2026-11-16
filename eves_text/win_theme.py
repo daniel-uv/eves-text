@@ -8,6 +8,11 @@ import os
 # DWMWA_USE_IMMERSIVE_DARK_MODE: 20 в Windows 11 и новых сборках Windows 10,
 # 19 — в ранних сборках Windows 10.
 _DARK_MODE_ATTRIBUTES = (20, 19)
+# DWMWA_BORDER_COLOR: цвет 1-пиксельной рамки окна (Windows 11).
+# DWMWA_COLOR_NONE убирает светлую рамку вокруг тёмного окна.
+_BORDER_COLOR_ATTRIBUTE = 34
+_DWMWA_COLOR_NONE = 0xFFFFFFFE
+_DWMWA_COLOR_DEFAULT = 0xFFFFFFFF
 _SWP_NOSIZE = 0x0001
 _SWP_NOMOVE = 0x0002
 _SWP_NOZORDER = 0x0004
@@ -110,6 +115,22 @@ def apply_dark_titlebar(hwnd: int, dark: bool) -> None:
             break
     if not applied:
         return
+
+    # В Windows 11 по краю тёмного окна остаётся светлая 1-пиксельная
+    # рамка. Убираем её, а при светлой теме возвращаем оформлению Windows
+    # рамку по умолчанию.
+    try:
+        color = ctypes.c_uint(
+            _DWMWA_COLOR_NONE if dark else _DWMWA_COLOR_DEFAULT
+        )
+        dwmapi.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd),
+            _BORDER_COLOR_ATTRIBUTE,
+            ctypes.byref(color),
+            ctypes.sizeof(color),
+        )
+    except (AttributeError, OSError):
+        pass
 
     # Попросить Windows перерисовать рамку с новым оформлением.
     try:

@@ -123,12 +123,12 @@ def test_win_theme() -> None:
     class FakeDwm:
         def __init__(self) -> None:
             self.calls: list[tuple[int, int]] = []
-            # Атрибут 20 не поддержан, атрибут 19 сработал.
-            self.results = [1, 0]
+            # Атрибут 20 не поддержан, атрибут 19 и цвет рамки сработали.
+            self.results = [1, 0, 0]
 
         def DwmSetWindowAttribute(self, hwnd, attribute, value, size):
             pointer = ctypes.cast(value, ctypes.POINTER(ctypes.c_int))
-            self.calls.append((attribute, pointer.contents.value))
+            self.calls.append((attribute, pointer.contents.value & 0xFFFFFFFF))
             return self.results.pop(0)
 
     class FakeUser32:
@@ -155,7 +155,7 @@ def test_win_theme() -> None:
     finally:
         win_theme._DWMAPI, win_theme._USER32, win_theme.os = original
 
-    assert dwm.calls == [(20, 1), (19, 1)], dwm.calls
+    assert dwm.calls == [(20, 1), (19, 1), (34, 0xFFFFFFFE)], dwm.calls
     assert user32.calls == 1
 
 
