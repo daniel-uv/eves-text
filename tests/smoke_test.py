@@ -114,6 +114,51 @@ def test_updates() -> None:
     assert updates.select_release(releases, "0.6.6", "linux") is None
 
 
+def test_win_theme() -> None:
+    import ctypes
+    from types import SimpleNamespace
+
+    from eves_text import win_theme
+
+    class FakeDwm:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, int]] = []
+            # Атрибут 20 не поддержан, атрибут 19 сработал.
+            self.results = [1, 0]
+
+        def DwmSetWindowAttribute(self, hwnd, attribute, value, size):
+            pointer = ctypes.cast(value, ctypes.POINTER(ctypes.c_int))
+            self.calls.append((attribute, pointer.contents.value))
+            return self.results.pop(0)
+
+    class FakeUser32:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def SetWindowPos(self, *args):
+            self.calls += 1
+            return 1
+
+    # На Linux вызов ничего не делает и не падает.
+    win_theme.apply_dark_titlebar(42, True)
+    assert win_theme.gdk_window_handle(None) == 0
+    assert win_theme.gdk_window_handle(object()) == 0
+
+    original = (win_theme._DWMAPI, win_theme._USER32, win_theme.os)
+    dwm = FakeDwm()
+    user32 = FakeUser32()
+    try:
+        win_theme._DWMAPI = dwm
+        win_theme._USER32 = user32
+        win_theme.os = SimpleNamespace(name="nt")
+        win_theme.apply_dark_titlebar(42, True)
+    finally:
+        win_theme._DWMAPI, win_theme._USER32, win_theme.os = original
+
+    assert dwm.calls == [(20, 1), (19, 1)], dwm.calls
+    assert user32.calls == 1
+
+
 def test_window() -> None:
     app = Application()
     app.register(None)
@@ -137,5 +182,6 @@ def test_window() -> None:
 if __name__ == "__main__":
     test_document()
     test_updates()
+    test_win_theme()
     test_window()
     print("OK: smoke test пройден")

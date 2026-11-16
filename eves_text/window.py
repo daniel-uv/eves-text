@@ -15,7 +15,7 @@ gi.require_version("GtkSource", "4")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, GtkSource, Pango  # noqa: E402
 
-from . import __version__, ai_check, document, updates  # noqa: E402
+from . import __version__, ai_check, document, updates, win_theme  # noqa: E402
 from . import settings as user_settings  # noqa: E402
 from .ollama_server import (  # noqa: E402
     ManagedOllama,
@@ -35,6 +35,16 @@ ALIGNMENTS: tuple[tuple[str, str, Gtk.Justification, str], ...] = (
 )
 
 DEFAULT_FONT_SIZE = 12
+
+# Готовые варианты для меню «ИИ» → «Скачать модель».
+MODEL_CHOICES: tuple[tuple[str, str], ...] = (
+    ("qwen2.5:7b-instruct", "qwen2.5 7B — лучшее качество (~4,7 ГБ)"),
+    ("qwen2.5:3b-instruct", "qwen2.5 3B — быстрее (~1,9 ГБ)"),
+    ("qwen2.5:1.5b-instruct", "qwen2.5 1.5B — для слабых ПК (~1 ГБ)"),
+    ("qwen2.5:0.5b", "qwen2.5 0.5B — самая лёгкая (~400 МБ)"),
+    ("gemma3:4b", "Gemma 3 4B — альтернатива (~3,3 ГБ)"),
+    ("llama3.2:3b", "Llama 3.2 3B — альтернатива (~2 ГБ)"),
+)
 
 
 def default_font_family() -> str:
@@ -131,6 +141,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._update_downloaded: Path | None = None
         self._update_progress_time = 0.0
         self._destroyed = False
+        self._dark_theme = False
 
         self.set_default_size(1000, 700)
         self._icon_name = app_icon_name()
@@ -598,6 +609,7 @@ class MainWindow(Gtk.ApplicationWindow):
             pass
 
         self.connect("delete-event", self._on_delete_event)
+        self.connect("map", self._on_map)
 
         # Перетаскивание файла в окно.
         self.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
@@ -932,6 +944,7 @@ class MainWindow(Gtk.ApplicationWindow):
         dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
         dialog.add_button("Скачать", Gtk.ResponseType.OK)
         dialog.set_default_response(Gtk.ResponseType.OK)
+        self._watch_dark_titlebar(dialog)
 
         content = dialog.get_content_area()
         content.set_border_width(16)
@@ -955,12 +968,18 @@ class MainWindow(Gtk.ApplicationWindow):
 
         grid = Gtk.Grid(column_spacing=10, row_spacing=10)
         model_label = Gtk.Label(label="Модель:", xalign=0.0)
-        model_entry = Gtk.Entry()
-        model_entry.set_text(self._model_name)
-        model_entry.set_hexpand(True)
-        model_entry.set_placeholder_text("например, qwen2.5:7b-instruct")
+        model_combo = Gtk.ComboBoxText.new_with_entry()
+        title_to_id: dict[str, str] = {}
+        for model_id, model_title in MODEL_CHOICES:
+            model_combo.append(model_id, model_title)
+            title_to_id[model_title] = model_id
+        model_combo.set_hexpand(True)
+        model_entry = model_combo.get_child()
+        model_entry.set_placeholder_text("выберите из списка или введите название")
+        if not model_combo.set_active_id(self._model_name):
+            model_entry.set_text(self._model_name)
         grid.attach(model_label, 0, 0, 1, 1)
-        grid.attach(model_entry, 1, 0, 1, 1)
+        grid.attach(model_combo, 1, 0, 1, 1)
 
         dir_label = Gtk.Label(label="Папка для моделей:", xalign=0.0)
         dir_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -979,8 +998,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
         hint = Gtk.Label(
             label=(
-                "Название и размер модели задаёт Ollama. Скачивание может "
-                "занять несколько минут; его можно отменить."
+                "Выберите готовый вариант или введите название модели вручную. "
+                "Размер задаёт Ollama; скачивание может занять несколько минут, "
+                "его можно отменить."
             )
         )
         hint.set_xalign(0.0)
@@ -999,6 +1019,9 @@ class MainWindow(Gtk.ApplicationWindow):
                 dlg.destroy()
                 return
             model = model_entry.get_text().strip()
+            # ComboBoxText с полем ввода подставляет в него подпись варианта,
+            # поэтому выбранную подпись превращаем обратно в имя модели.
+            model = title_to_id.get(model, model)
             directory = dir_entry.get_text().strip()
             if not model:
                 error_label.set_text("Укажите название модели.")
@@ -1038,6 +1061,7 @@ class MainWindow(Gtk.ApplicationWindow):
             "_Выбрать",
             "_Отмена",
         )
+        self._watch_dark_titlebar(chooser)
         current = entry.get_text().strip()
         if current:
             path = Path(current).expanduser()
@@ -1068,6 +1092,7 @@ class MainWindow(Gtk.ApplicationWindow):
             "_Выбрать",
             "_Отмена",
         )
+        self._watch_dark_titlebar(chooser)
         current = self._models_dir or str(default_models_dir())
         path = Path(current).expanduser()
         if path.is_dir():
@@ -1175,6 +1200,7 @@ class MainWindow(Gtk.ApplicationWindow):
         dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
         dialog.set_default_response(Gtk.ResponseType.CANCEL)
         dialog.connect("response", self._on_pull_cancel)
+        self._watch_dark_titlebar(dialog)
 
         content = dialog.get_content_area()
         content.set_border_width(16)
@@ -1397,6 +1423,7 @@ class MainWindow(Gtk.ApplicationWindow):
             text=title,
         )
         dialog.format_secondary_text(message)
+        self._watch_dark_titlebar(dialog)
         dialog.connect("response", lambda dlg, _response: dlg.destroy())
         dialog.show()
 
@@ -1582,11 +1609,36 @@ class MainWindow(Gtk.ApplicationWindow):
             dark = bool(settings.get_property("gtk-application-prefer-dark-theme")) or (
                 "dark" in theme
             )
+        self._dark_theme = dark
         scheme_id = "oblivion" if dark else "kate"
         manager = GtkSource.StyleSchemeManager.get_default()
         scheme = manager.get_scheme(scheme_id) or manager.get_scheme("classic")
         if scheme is not None:
             self.buffer.set_style_scheme(scheme)
+        self._apply_windows_titlebar()
+
+    def _on_map(self, *_args) -> None:
+        self._apply_windows_titlebar()
+
+    def _apply_windows_titlebar(self, window: Gtk.Window | None = None) -> None:
+        """Красит заголовок окна в тёмный цвет на Windows 10/11."""
+        if os.name != "nt":
+            return
+        target = window or self
+        gdk_window = target.get_window()
+        if gdk_window is None:
+            return
+        handle = win_theme.gdk_window_handle(gdk_window)
+        if handle:
+            win_theme.apply_dark_titlebar(handle, self._dark_theme)
+
+    def _watch_dark_titlebar(self, window: Gtk.Window) -> None:
+        """Применяет тёмную шапку к диалогу после его появления."""
+        if os.name != "nt" or not isinstance(window, Gtk.Window):
+            return
+        window.connect(
+            "map", lambda widget, *_: self._apply_windows_titlebar(widget)
+        )
 
     # ------------------------------------------------------------------ text
 
@@ -1818,6 +1870,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_about(self, *_args) -> None:
         dialog = Gtk.AboutDialog(transient_for=self, modal=True)
+        self._watch_dark_titlebar(dialog)
         dialog.set_program_name(APP_NAME)
         dialog.set_version(__version__)
         dialog.set_comments(

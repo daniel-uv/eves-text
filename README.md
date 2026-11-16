@@ -17,6 +17,7 @@ Eve's Text — простой текстовый редактор для Linux �
 - Новый / открыть / сохранить / сохранить как, подтверждение несохранённых правок
 - Чтение UTF-8 и CP1251 (старые русские файлы), запись всегда в UTF-8, атомарно
 - Автоматическое определение светлой/тёмной темы и схемы подсветки
+- В Windows 11 заголовок окна и диалогов тоже становится тёмным при тёмной теме
 - Номера строк (по умолчанию выключены), подсветка текущей строки, перенос строк
 - Поля вокруг текста: документ не прилипает к краям окна
 - Нижняя панель: размер шрифта, выравнивание абзацев (лево/центр/право/по ширине),
@@ -51,8 +52,8 @@ python3 -m eves_text --version
 ## Сборка и установка .deb
 
 ```bash
-./packaging/build-deb.sh                 # -> dist/eves-text_0.6.6-1_all.deb
-sudo dpkg -i dist/eves-text_0.6.6-1_all.deb
+./packaging/build-deb.sh                 # -> dist/eves-text_0.6.7-1_all.deb
+sudo dpkg -i dist/eves-text_0.6.7-1_all.deb
 eves-text                                # или из меню «Eve's Text»
 ```
 
@@ -67,9 +68,9 @@ MAINTAINER="Имя <mail@example.org>" ./packaging/build-deb.sh
 Проверить пакет без установки:
 
 ```bash
-dpkg-deb --info dist/eves-text_0.6.6-1_all.deb
-dpkg-deb -c dist/eves-text_0.6.6-1_all.deb
-dpkg-deb -x dist/eves-text_0.6.6-1_all.deb /tmp/eves-text-root
+dpkg-deb --info dist/eves-text_0.6.7-1_all.deb
+dpkg-deb -c dist/eves-text_0.6.7-1_all.deb
+dpkg-deb -x dist/eves-text_0.6.7-1_all.deb /tmp/eves-text-root
 /tmp/eves-text-root/usr/lib/eves-text/eves-text --version
 ```
 
@@ -128,6 +129,7 @@ eves-text/
 │   ├── ollama_server.py       отдельная служба Ollama с выбранной папкой
 │   ├── settings.py            JSON-настройки модели и папки (без GTK)
 │   ├── updates.py             проверка релизов GitHub и скачивание (без GTK)
+│   ├── win_theme.py           тёмный заголовок окна в Windows (без GTK)
 │   ├── document.py            чтение/запись файлов и статистика (без GTK)
 │   └── resources/             style.css, eves-text.desktop
 ├── packaging/
@@ -173,7 +175,9 @@ curl -fsSL https://ollama.com/install.sh | sh
 ### Ручное скачивание модели
 
 Модель не скачивается автоматически. Откройте меню **«ИИ» → «Скачать модель»**,
-укажите название (по умолчанию `qwen2.5:7b-instruct`) и папку для моделей.
+выберите модель из списка (например, `qwen2.5:7b-instruct` — лучшее качество,
+`qwen2.5:0.5b` — самая лёгкая) и укажите папку для моделей. Название можно и
+ввести вручную, если нужной модели нет в списке.
 Приложение создаст папку, запустит отдельную службу `ollama serve` на свободном
 порту с `OLLAMA_MODELS=<выбранная папка>` и скачает модель туда. Системная
 Ollama и её модели не меняются. Прогресс виден в диалоге, скачивание можно
