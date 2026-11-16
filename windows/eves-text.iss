@@ -1,9 +1,9 @@
 ; Установщик Eve's Text для Windows 11 (Inno Setup 6).
 ; Собирается после windows/build-portable.sh:
-;   ISCC.exe /DMyAppVersion=0.6.7 windows\eves-text.iss
+;   ISCC.exe /DMyAppVersion=0.6.8 windows\eves-text.iss
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.6.7"
+  #define MyAppVersion "0.6.8"
 #endif
 
 #define MyAppName "Eve's Text"
@@ -34,6 +34,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 MinVersion=10.0.22000
+CloseApplications=yes
+RestartApplications=no
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -51,4 +53,4 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\bin\pythonw.exe"; Parameters: """{app}\app\launcher.py"""; WorkingDir: "{app}"; IconFilename: "{app}\eves-text.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\bin\pythonw.exe"; Parameters: """{app}\app\launcher.py"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\bin\pythonw.exe"; Parameters: """{app}\app\launcher.py"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall runasoriginaluser

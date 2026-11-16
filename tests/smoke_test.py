@@ -159,6 +159,68 @@ def test_win_theme() -> None:
     assert user32.calls == 1
 
 
+def test_windows_installer() -> None:
+    import ctypes
+    from types import SimpleNamespace
+
+    from eves_text import updates
+
+    # Не-Windows: автоматическая установка не запускается.
+    assert updates.launch_windows_installer(Path("setup.exe"))[0] is False
+
+    class FakeShellExecute:
+        def __init__(self, result: int) -> None:
+            self.result = result
+            self.calls: list[tuple] = []
+
+        def __call__(self, *args):
+            self.calls.append(args)
+            return self.result
+
+    shell = FakeShellExecute(42)
+    fake_windll = SimpleNamespace(shell32=SimpleNamespace(ShellExecuteW=shell))
+    original_platform = updates.platform_kind
+    original_windll = getattr(ctypes, "windll", None)
+
+    def patch() -> None:
+        updates.platform_kind = lambda: "windows"
+        ctypes.windll = fake_windll
+
+    def restore() -> None:
+        updates.platform_kind = original_platform
+        if original_windll is None:
+            del ctypes.windll
+        else:
+            ctypes.windll = original_windll
+
+    with tempfile.TemporaryDirectory() as tmp:
+        setup = Path(tmp) / "EvesText-9.9.9-win64-setup.exe"
+        setup.write_bytes(b"setup")
+        try:
+            patch()
+            ok, error = updates.launch_windows_installer(setup)
+        finally:
+            restore()
+
+        assert ok and error == "", (ok, error)
+        assert shell.calls, shell.calls
+        hwnd, verb, path, parameters, directory, show = shell.calls[0]
+        assert hwnd is None
+        assert verb == "runas"
+        assert path == str(setup)
+        assert "/SILENT" in parameters and "/CLOSEAPPLICATIONS" in parameters
+        assert directory == str(setup.parent)
+        assert show == 1
+
+        shell.result = 5
+        try:
+            patch()
+            ok, error = updates.launch_windows_installer(setup)
+        finally:
+            restore()
+        assert not ok and "UAC" in error, (ok, error)
+
+
 def test_window() -> None:
     app = Application()
     app.register(None)
@@ -183,5 +245,6 @@ if __name__ == "__main__":
     test_document()
     test_updates()
     test_win_theme()
+    test_windows_installer()
     test_window()
     print("OK: smoke test пройден")

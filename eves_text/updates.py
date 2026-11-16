@@ -155,3 +155,44 @@ def download_asset(
             pass
         raise UpdateError(f"Не удалось скачать обновление: {exc}") from exc
     return destination
+
+
+def launch_windows_installer(path: Path) -> tuple[bool, str]:
+    """Запускает скачанный установщик Windows с повышением прав (UAC)."""
+    if platform_kind() != "windows":
+        return False, "Автоматическая установка доступна только в Windows."
+    path = Path(path)
+    if not path.is_file():
+        return False, f"Файл обновления не найден:\n{path}"
+
+    import ctypes  # локально: на Linux у ctypes нет windll
+
+    parameters = "/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS"
+    try:
+        shell32 = ctypes.windll.shell32
+        shell32.ShellExecuteW.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+            ctypes.c_int,
+        ]
+        shell32.ShellExecuteW.restype = ctypes.c_void_p
+        result = shell32.ShellExecuteW(
+            None,
+            "runas",
+            str(path),
+            parameters,
+            str(path.parent),
+            1,
+        )
+    except (AttributeError, OSError) as exc:
+        return False, f"Не удалось запустить установщик:\n{exc}"
+
+    code = int(result or 0)
+    if code > 32:
+        return True, ""
+    if code == 5:
+        return False, "Запуск установщика отменён или запрещён Windows (UAC)."
+    return False, f"Не удалось запустить установщик (код {code})."

@@ -186,6 +186,11 @@ def main() -> int:
                 encoding="utf-8",
                 errors="replace",
                 check=False,
+                creationflags=(
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    if os.name == "nt"
+                    else 0
+                ),
             )
             out = result.stdout or ""
             detail += (

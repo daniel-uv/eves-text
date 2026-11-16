@@ -52,8 +52,8 @@ python3 -m eves_text --version
 ## Сборка и установка .deb
 
 ```bash
-./packaging/build-deb.sh                 # -> dist/eves-text_0.6.7-1_all.deb
-sudo dpkg -i dist/eves-text_0.6.7-1_all.deb
+./packaging/build-deb.sh                 # -> dist/eves-text_0.6.8-1_all.deb
+sudo dpkg -i dist/eves-text_0.6.8-1_all.deb
 eves-text                                # или из меню «Eve's Text»
 ```
 
@@ -68,9 +68,9 @@ MAINTAINER="Имя <mail@example.org>" ./packaging/build-deb.sh
 Проверить пакет без установки:
 
 ```bash
-dpkg-deb --info dist/eves-text_0.6.7-1_all.deb
-dpkg-deb -c dist/eves-text_0.6.7-1_all.deb
-dpkg-deb -x dist/eves-text_0.6.7-1_all.deb /tmp/eves-text-root
+dpkg-deb --info dist/eves-text_0.6.8-1_all.deb
+dpkg-deb -c dist/eves-text_0.6.8-1_all.deb
+dpkg-deb -x dist/eves-text_0.6.8-1_all.deb /tmp/eves-text-root
 /tmp/eves-text-root/usr/lib/eves-text/eves-text --version
 ```
 
@@ -227,10 +227,12 @@ export RU_EDITOR_OLLAMA_URL=http://127.0.0.1:11434
 
 В правом нижнем углу окна есть надпись **«Версия актуальна»**. Нажмите на неё:
 приложение проверит релизы на GitHub и, если появилась новая версия, скачает
-пакет в папку загрузок и покажет путь к файлу. Надпись сменится на
-«Скачана версия X»; повторное нажатие откроет папку с загрузкой.
+пакет. Надпись показывает прогресс, затем — «Устанавливаю X…».
 
-- Linux: скачивается `.deb`, установка — `sudo dpkg -i <файл>`.
-- Windows: скачивается установщик `.exe`, его нужно запустить.
+- Linux: скачивается `.deb`, установка — `sudo dpkg -i <файл>`; надпись
+  «Скачана версия X», повторное нажатие открывает папку с загрузкой.
+- Windows: после скачивания установщик запускается автоматически (Windows
+  попросит подтвердить права администратора), приложение закрывается и после
+  установки открывается снова.
 
-Проверка и скачивание выполняются в фоне и не блокируют окно.
+Проверка, скачивание и установка идут в фоне и не блокируют окно.

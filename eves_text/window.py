@@ -139,6 +139,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._message_timeout = 0
         self._update_busy = False
         self._update_downloaded: Path | None = None
+        self._update_version = ""
         self._update_progress_time = 0.0
         self._destroyed = False
         self._dark_theme = False
@@ -1439,11 +1440,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self.version_button.set_tooltip_text(tooltip or "Проверить обновления")
 
     def action_check_updates(self, *_args) -> None:
-        """Проверяет обновления; новую версию скачивает в «Загрузки»."""
+        """Проверяет обновления; новую версию скачивает и устанавливает."""
         if self._update_busy:
             return
         if self._update_downloaded is not None:
-            self._open_downloads_folder()
+            if updates.platform_kind() == "windows":
+                self._install_windows_update()
+            else:
+                self._open_downloads_folder()
             return
         self._start_update_check()
 
@@ -1555,19 +1559,67 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
         self._update_busy = False
         self._update_downloaded = destination
+        self._update_version = release.version
         self.version_button.set_sensitive(True)
+
+        if updates.platform_kind() == "windows":
+            self._set_update_label(
+                f"Скачана версия {release.version}", "Установить обновление"
+            )
+            self._show_message(
+                f"Версия {release.version} скачана, запускаю установку…",
+                seconds=0,
+            )
+            GLib.timeout_add(400, self._install_windows_update)
+            return False
+
         self._set_update_label(
             f"Скачана версия {release.version}",
             "Открыть папку с загруженным обновлением",
         )
-        if updates.platform_kind() == "windows":
-            hint = "Запустите скачанный установщик."
-        else:
-            hint = f"Установка: sudo dpkg -i «{destination}»."
         self._show_message(
-            f"Версия {release.version} скачана: {destination}. {hint}",
+            f"Версия {release.version} скачана: {destination}. "
+            f"Установка: sudo dpkg -i «{destination}».",
             seconds=20,
         )
+        return False
+
+    def _install_windows_update(self) -> bool:
+        """Запускает скачанный установщик и закрывает приложение."""
+        if self._destroyed:
+            return False
+        path = self._update_downloaded
+        if path is None:
+            return False
+        if not self._confirm_discard():
+            self._set_update_label(
+                f"Скачана версия {self._update_version}", "Установить обновление"
+            )
+            return False
+
+        ok, error = updates.launch_windows_installer(path)
+        if not ok:
+            self._set_update_label(
+                f"Скачана версия {self._update_version}", "Установить обновление"
+            )
+            self._show_message("Не удалось запустить установщик обновления", seconds=10)
+            self._show_notice("Обновление", error)
+            return False
+
+        self._set_update_label(f"Устанавливаю {self._update_version}…")
+        self._show_message(
+            "Установщик запущен. Приложение закроется и откроется снова.",
+            seconds=0,
+        )
+        GLib.timeout_add(600, self._quit_for_update)
+        return False
+
+    def _quit_for_update(self) -> bool:
+        application = self.get_application()
+        if application is not None:
+            application.quit()
+        else:
+            self.destroy()
         return False
 
     def _update_failed(self, message: str) -> bool:

@@ -31,6 +31,13 @@ def local_app_data() -> Path:
     return path
 
 
+def _subprocess_options() -> dict:
+    """Не показывать окно консоли при запуске служебных программ Windows."""
+    if os.name != "nt":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
 def make_cache(
     exe: Path,
     target: Path,
@@ -59,6 +66,7 @@ def make_cache(
             env=env,
             timeout=120,
             check=False,
+            **_subprocess_options(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
