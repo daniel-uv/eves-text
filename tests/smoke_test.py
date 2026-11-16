@@ -159,20 +159,40 @@ def test_win_theme() -> None:
     assert user32.calls == 1
 
 
-def test_caret_blink() -> None:
-    class FakeSettings:
-        def __init__(self) -> None:
-            self.props: dict[str, object] = {}
+def test_caret_blinker() -> None:
+    from eves_text.caret import CaretBlinker
 
-        def set_property(self, name: str, value: object) -> None:
-            self.props[name] = value
+    window = Gtk.OffscreenWindow()
+    view = Gtk.TextView()
+    view.set_left_margin(6)
+    view.set_top_margin(4)
+    window.add(view)
+    window.show_all()
+    while Gtk.events_pending():
+        Gtk.main_iteration_do(False)
 
-    settings = FakeSettings()
-    Application._configure_caret(settings, platform="linux")
-    assert settings.props == {}
+    view.get_buffer().set_text("Привет\nмир")
+    while Gtk.events_pending():
+        Gtk.main_iteration_do(False)
 
-    Application._configure_caret(settings, platform="win32")
-    assert settings.props == {"gtk-cursor-blink": False}, settings.props
+    blinker = CaretBlinker(view)
+    # Штатная каретка скрыта: вместо неё рисуется своя.
+    assert view.get_cursor_visible() is False
+
+    rect = blinker._caret_rect()
+    assert rect is not None
+    left, top, width, height = rect
+    assert width >= 1, rect
+    assert height > 0, rect
+    assert top >= 0, rect
+    assert left >= 0, rect
+
+    color = blinker._cursor_color()
+    assert 0.0 <= color.alpha <= 1.0
+
+    blinker.stop()
+    assert blinker._timeout == 0
+    window.destroy()
 
 
 def test_windows_installer() -> None:
@@ -383,7 +403,7 @@ if __name__ == "__main__":
     test_document()
     test_updates()
     test_win_theme()
-    test_caret_blink()
+    test_caret_blinker()
     test_windows_installer()
     test_linux_installer()
     test_linux_restart()

@@ -19,6 +19,9 @@
 При тёмной теме Windows заголовок окна редактора и диалогов тоже тёмный:
 приложение применяет к ним системное оформление DWM.
 
+Каретка ввода мигает, как обычно, но рисуется отдельно от штатной каретки GTK:
+так на Windows не остаётся светлого пикселя на её конце.
+
 ## Как запускать
 
 - Обычный запуск — ярлык «Eve's Text» или `Eve's Text.vbs` в папке программы.
@@ -144,7 +147,7 @@ Eve's Text\
 5. Установщик (по желанию, нужен [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
    ```bat
-   ISCC.exe /DMyAppVersion=0.6.11 windows\eves-text.iss
+   ISCC.exe /DMyAppVersion=0.6.12 windows\eves-text.iss
    ```
 
    Готовый файл — `windows\dist-installer\EvesText-<версия>-win64-setup.exe`.

@@ -18,6 +18,7 @@ Eve's Text — простой текстовый редактор для Linux �
 - Чтение UTF-8 и CP1251 (старые русские файлы), запись всегда в UTF-8, атомарно
 - Автоматическое определение светлой/тёмной темы и схемы подсветки
 - В Windows 11 заголовок окна и диалогов тоже становится тёмным при тёмной теме
+- В Windows каретка мигает и рисуется без лишнего светлого пикселя на конце
 - Номера строк (по умолчанию выключены), подсветка текущей строки, перенос строк
 - Поля вокруг текста: документ не прилипает к краям окна
 - Нижняя панель: размер шрифта, выравнивание абзацев (лево/центр/право/по ширине),
@@ -52,8 +53,8 @@ python3 -m eves_text --version
 ## Сборка и установка .deb
 
 ```bash
-./packaging/build-deb.sh                 # -> dist/eves-text_0.6.11-1_all.deb
-sudo dpkg -i dist/eves-text_0.6.11-1_all.deb
+./packaging/build-deb.sh                 # -> dist/eves-text_0.6.12-1_all.deb
+sudo dpkg -i dist/eves-text_0.6.12-1_all.deb
 eves-text                                # или из меню «Eve's Text»
 ```
 
@@ -68,9 +69,9 @@ MAINTAINER="Имя <mail@example.org>" ./packaging/build-deb.sh
 Проверить пакет без установки:
 
 ```bash
-dpkg-deb --info dist/eves-text_0.6.11-1_all.deb
-dpkg-deb -c dist/eves-text_0.6.11-1_all.deb
-dpkg-deb -x dist/eves-text_0.6.11-1_all.deb /tmp/eves-text-root
+dpkg-deb --info dist/eves-text_0.6.12-1_all.deb
+dpkg-deb -c dist/eves-text_0.6.12-1_all.deb
+dpkg-deb -x dist/eves-text_0.6.12-1_all.deb /tmp/eves-text-root
 /tmp/eves-text-root/usr/lib/eves-text/eves-text --version
 ```
 
@@ -124,6 +125,7 @@ eves-text/
 │   ├── __main__.py            python3 -m eves_text
 │   ├── application.py         Gtk.Application, CSS, аргументы, --version
 │   ├── window.py              окно, меню, действия, статусбар
+│   ├── caret.py               своя мигающая каретка для Windows
 │   ├── spellcheck.py          проверка орфографии (gspell + текстовые теги)
 │   ├── ai_check.py            проверка текста через Ollama (без GTK)
 │   ├── ollama_server.py       отдельная служба Ollama с выбранной папкой

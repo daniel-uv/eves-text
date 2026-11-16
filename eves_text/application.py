@@ -46,7 +46,6 @@ class Application(Gtk.Application):
         Gtk.Application.do_startup(self)
         self._setup_icons()
         self._apply_system_theme()
-        self._configure_caret()
         self._load_css()
 
     @staticmethod
@@ -91,22 +90,6 @@ class Application(Gtk.Application):
         settings = Gtk.Settings.get_default()
         if settings is not None:
             settings.set_property("gtk-application-prefer-dark-theme", not bool(light))
-
-    @staticmethod
-    def _configure_caret(settings=None, platform: str | None = None) -> None:
-        """На Windows отключаем мигание каретки.
-
-        GTK3 рисует каретку с дробной высотой, а при мигании стирает её
-        по округлённой высоте строки. На Win32-бэкенде нижний пиксель
-        каретки не стирается в фазе «выключено» и остаётся светлой точкой
-        на конце строки. Без мигания такой фазы нет.
-        """
-        if (sys.platform if platform is None else platform) != "win32":
-            return
-        if settings is None:
-            settings = Gtk.Settings.get_default()
-        if settings is not None:
-            settings.set_property("gtk-cursor-blink", False)
 
     @staticmethod
     def _load_css() -> None:

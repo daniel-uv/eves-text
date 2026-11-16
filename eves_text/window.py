@@ -17,6 +17,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk, GtkSource, Pango  # noqa: E402
 
 from . import __version__, ai_check, document, updates, win_theme  # noqa: E402
 from . import settings as user_settings  # noqa: E402
+from .caret import CaretBlinker  # noqa: E402
 from .ollama_server import (  # noqa: E402
     ManagedOllama,
     OllamaStartError,
@@ -143,6 +144,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._update_progress_time = 0.0
         self._destroyed = False
         self._dark_theme = False
+        self._caret: CaretBlinker | None = None
 
         self.set_default_size(1000, 700)
         self._icon_name = app_icon_name()
@@ -203,6 +205,10 @@ class MainWindow(Gtk.ApplicationWindow):
         # Проверка орфографии делается своим слоем на текстовых тегах.
         # Gspell.TextView здесь не используется: он ломает обработку клавиатуры.
         self.spellcheck = SpellCheck(self.buffer, self.view)
+        # На Windows штатная каретка GTK оставляет светлый пиксель на конце,
+        # поэтому там рисуется и мигает своя каретка.
+        if os.name == "nt":
+            self._caret = CaretBlinker(self.view)
         self._popup_iter = None
 
     def _build_ui(self) -> None:
@@ -1947,6 +1953,8 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_destroy(self, *_args) -> None:
         """Останавливает скачивание и отдельную службу при закрытии окна."""
         self._destroyed = True
+        if self._caret is not None:
+            self._caret.stop()
         if self._ai_pull_cancel is not None:
             self._ai_pull_cancel.set()
         self._managed_ollama.stop()
