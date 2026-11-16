@@ -171,10 +171,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.view.modify_font(font)
         # Номера строк по умолчанию выключены (включаются в меню «Вид»).
         self.view.set_show_line_numbers(False)
-        # Подсветка текущей строки выключена по умолчанию: на тёмной теме
-        # светлая полоса во всю ширину выглядит как артефакт под строкой
-        # ввода. Включается в меню «Вид».
-        self.view.set_highlight_current_line(False)
+        self.view.set_highlight_current_line(True)
         self.view.set_auto_indent(True)
         self.view.set_tab_width(4)
         # Настоящая табуляция: Tab вставляет символ \t, а не четыре пробела.
