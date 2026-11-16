@@ -1447,7 +1447,7 @@ class MainWindow(Gtk.ApplicationWindow):
             if updates.platform_kind() == "windows":
                 self._install_windows_update()
             else:
-                self._open_downloads_folder()
+                self._install_linux_update()
             return
         self._start_update_check()
 
@@ -1574,19 +1574,18 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
 
         self._set_update_label(
-            f"Скачана версия {release.version}",
-            "Открыть папку с загруженным обновлением",
+            f"Скачана версия {release.version}", "Установить обновление"
         )
         self._show_message(
-            f"Версия {release.version} скачана: {destination}. "
-            f"Установка: sudo dpkg -i «{destination}».",
-            seconds=20,
+            f"Версия {release.version} скачана, запускаю установку…",
+            seconds=0,
         )
+        GLib.timeout_add(400, self._install_linux_update)
         return False
 
     def _install_windows_update(self) -> bool:
         """Запускает скачанный установщик и закрывает приложение."""
-        if self._destroyed:
+        if self._destroyed or self._update_busy:
             return False
         path = self._update_downloaded
         if path is None:
@@ -1614,6 +1613,64 @@ class MainWindow(Gtk.ApplicationWindow):
         GLib.timeout_add(600, self._quit_for_update)
         return False
 
+    def _install_linux_update(self) -> bool:
+        """Устанавливает скачанный .deb через pkexec и перезапускает окно."""
+        if self._destroyed or self._update_busy:
+            return False
+        path = self._update_downloaded
+        if path is None:
+            return False
+        if not self._confirm_discard():
+            self._set_update_label(
+                f"Скачана версия {self._update_version}", "Установить обновление"
+            )
+            return False
+
+        self._update_busy = True
+        self.version_button.set_sensitive(False)
+        self._set_update_label(f"Устанавливаю {self._update_version}…")
+        self._show_message(
+            "Запрашиваю права администратора для установки обновления…",
+            seconds=0,
+        )
+        threading.Thread(
+            target=self._linux_install_worker,
+            args=(path,),
+            daemon=True,
+        ).start()
+        return False
+
+    def _linux_install_worker(self, path: Path) -> None:
+        ok, error = updates.launch_linux_installer(path)
+        GLib.idle_add(self._linux_install_done, ok, error)
+
+    def _linux_install_done(self, ok: bool, error: str) -> bool:
+        if self._destroyed:
+            return False
+        self._update_busy = False
+        if not ok:
+            self.version_button.set_sensitive(True)
+            self._set_update_label(
+                f"Скачана версия {self._update_version}", "Установить обновление"
+            )
+            self._show_message("Не удалось установить обновление", seconds=10)
+            self._show_notice("Обновление", error)
+            return False
+
+        self._set_update_label(f"Установлено {self._update_version}")
+        self._show_message(
+            "Обновление установлено, перезапускаю приложение…", seconds=0
+        )
+        GLib.timeout_add(600, self._restart_after_update)
+        return False
+
+    def _restart_after_update(self) -> bool:
+        ok, error = updates.restart_after_exit()
+        if not ok:
+            self._show_notice("Обновление", error)
+        self._quit_for_update()
+        return False
+
     def _quit_for_update(self) -> bool:
         application = self.get_application()
         if application is not None:
@@ -1631,25 +1688,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self._show_message("Не удалось проверить обновления", seconds=10)
         self._show_notice("Обновление", message)
         return False
-
-    def _open_downloads_folder(self) -> None:
-        path = self._update_downloaded
-        if path is None:
-            return
-        try:
-            opened = Gtk.show_uri_on_window(
-                self, path.parent.resolve().as_uri(), Gdk.CURRENT_TIME
-            )
-        except GLib.Error as exc:
-            self._show_notice(
-                "Обновление", f"Не удалось открыть папку:\n{exc.message}"
-            )
-            return
-        if not opened:
-            self._show_notice(
-                "Обновление",
-                f"Не удалось открыть папку в файловом менеджере:\n{path.parent}",
-            )
 
     # ---------------------------------------------------------------- theme
 

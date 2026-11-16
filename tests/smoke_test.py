@@ -237,6 +237,98 @@ def test_windows_installer() -> None:
         assert not ok and "UAC" in error, (ok, error)
 
 
+def test_linux_installer() -> None:
+    import subprocess
+    from types import SimpleNamespace
+
+    from eves_text import updates
+
+    # На не-Linux автоматическая установка не запускается.
+    original_platform = updates.platform_kind
+    try:
+        updates.platform_kind = lambda: "windows"
+        assert updates.launch_linux_installer(Path("update.deb"))[0] is False
+    finally:
+        updates.platform_kind = original_platform
+
+    with tempfile.TemporaryDirectory() as tmp:
+        deb = Path(tmp) / "eves-text_9.9.9-1_all.deb"
+        deb.write_bytes(b"deb")
+
+        calls: list[tuple] = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return SimpleNamespace(returncode=0, stdout="")
+
+        fake_subprocess = SimpleNamespace(
+            run=fake_run,
+            PIPE=subprocess.PIPE,
+            STDOUT=subprocess.STDOUT,
+            TimeoutExpired=subprocess.TimeoutExpired,
+        )
+        original_subprocess = updates.subprocess
+        original_which = updates.shutil.which
+        try:
+            updates.subprocess = fake_subprocess
+            updates.shutil.which = lambda name: f"/usr/bin/{name}"
+            ok, error = updates.launch_linux_installer(deb)
+        finally:
+            updates.subprocess = original_subprocess
+            updates.shutil.which = original_which
+
+        assert ok and error == "", (ok, error)
+        command, kwargs = calls[0]
+        assert command == [
+            "/usr/bin/pkexec",
+            "/usr/bin/dpkg",
+            "-i",
+            str(deb),
+        ], command
+        assert kwargs["timeout"] == 300
+
+        # Без pkexec остаётся понятная подсказка про ручную установку.
+        try:
+            updates.subprocess = fake_subprocess
+            updates.shutil.which = (
+                lambda name: None if name == "pkexec" else f"/usr/bin/{name}"
+            )
+            ok, error = updates.launch_linux_installer(deb)
+        finally:
+            updates.subprocess = original_subprocess
+            updates.shutil.which = original_which
+        assert not ok and "sudo dpkg -i" in error, error
+
+
+def test_linux_restart() -> None:
+    from types import SimpleNamespace
+
+    from eves_text import updates
+
+    captured: dict = {}
+
+    class FakePopen:
+        def __init__(self, command, **kwargs):
+            captured["command"] = command
+            captured["kwargs"] = kwargs
+
+    fake_subprocess = SimpleNamespace(Popen=FakePopen, DEVNULL=object())
+    original = updates.subprocess
+    try:
+        updates.subprocess = fake_subprocess
+        ok, error = updates.restart_after_exit()
+    finally:
+        updates.subprocess = original
+
+    assert ok and error == "", (ok, error)
+    command = captured["command"]
+    assert command[0] == "/bin/sh"
+    assert command[1] == "-c"
+    assert "kill -0" in command[2]
+    assert len(command) > 5
+    assert captured["kwargs"]["start_new_session"] is True
+
+
 def test_window() -> None:
     app = Application()
     app.register(None)
@@ -261,6 +353,9 @@ if __name__ == "__main__":
     test_document()
     test_updates()
     test_win_theme()
+    test_caret_blink()
     test_windows_installer()
+    test_linux_installer()
+    test_linux_restart()
     test_window()
     print("OK: smoke test пройден")

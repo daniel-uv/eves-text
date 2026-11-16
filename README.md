@@ -30,7 +30,7 @@ Eve's Text — простой текстовый редактор для Linux �
   папка для её хранения
 - Строка состояния: позиция курсора, кодировка, число слов и символов
 - Обновления: надпись «Версия актуальна» в правом нижнем углу — нажмите,
-  чтобы проверить и скачать новую версию
+  чтобы проверить, скачать и установить новую версию
 - Открытие файла из терминала, drag & drop в окно
 - Сборка в `.deb` и установка в меню приложений со своей иконкой
 
@@ -52,8 +52,8 @@ python3 -m eves_text --version
 ## Сборка и установка .deb
 
 ```bash
-./packaging/build-deb.sh                 # -> dist/eves-text_0.6.10-1_all.deb
-sudo dpkg -i dist/eves-text_0.6.10-1_all.deb
+./packaging/build-deb.sh                 # -> dist/eves-text_0.6.11-1_all.deb
+sudo dpkg -i dist/eves-text_0.6.11-1_all.deb
 eves-text                                # или из меню «Eve's Text»
 ```
 
@@ -68,9 +68,9 @@ MAINTAINER="Имя <mail@example.org>" ./packaging/build-deb.sh
 Проверить пакет без установки:
 
 ```bash
-dpkg-deb --info dist/eves-text_0.6.10-1_all.deb
-dpkg-deb -c dist/eves-text_0.6.10-1_all.deb
-dpkg-deb -x dist/eves-text_0.6.10-1_all.deb /tmp/eves-text-root
+dpkg-deb --info dist/eves-text_0.6.11-1_all.deb
+dpkg-deb -c dist/eves-text_0.6.11-1_all.deb
+dpkg-deb -x dist/eves-text_0.6.11-1_all.deb /tmp/eves-text-root
 /tmp/eves-text-root/usr/lib/eves-text/eves-text --version
 ```
 
@@ -229,8 +229,10 @@ export RU_EDITOR_OLLAMA_URL=http://127.0.0.1:11434
 приложение проверит релизы на GitHub и, если появилась новая версия, скачает
 пакет. Надпись показывает прогресс, затем — «Устанавливаю X…».
 
-- Linux: скачивается `.deb`, установка — `sudo dpkg -i <файл>`; надпись
-  «Скачана версия X», повторное нажатие открывает папку с загрузкой.
+- Linux: скачивается `.deb`, затем установка запускается автоматически через
+  `pkexec` (система попросит пароль администратора), после установки приложение
+  перезапускается. Если `pkexec` не установлен, показывается команда для ручной
+  установки.
 - Windows: после скачивания установщик запускается автоматически (Windows
   попросит подтвердить права администратора), приложение закрывается и после
   установки открывается снова.

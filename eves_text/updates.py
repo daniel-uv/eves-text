@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -196,3 +199,90 @@ def launch_windows_installer(path: Path) -> tuple[bool, str]:
     if code == 5:
         return False, "Запуск установщика отменён или запрещён Windows (UAC)."
     return False, f"Не удалось запустить установщик (код {code})."
+
+
+def launch_linux_installer(path: Path) -> tuple[bool, str]:
+    """Устанавливает скачанный ``.deb`` через pkexec.
+
+    pkexec показывает системный запрос пароля администратора. Функция
+    ждёт завершения dpkg, поэтому вызывается из фонового потока.
+    """
+    if platform_kind() != "linux":
+        return False, "Автоматическая установка доступна только в Linux."
+    path = Path(path)
+    if not path.is_file():
+        return False, f"Файл обновления не найден:\n{path}"
+
+    pkexec = shutil.which("pkexec")
+    if pkexec is None:
+        return False, (
+            "Не найден pkexec (PolicyKit), поэтому автоматическая установка "
+            "недоступна. Установите обновление вручную:\n"
+            f"sudo dpkg -i «{path}»"
+        )
+    dpkg = shutil.which("dpkg")
+    if dpkg is None:
+        return False, (
+            "Не найден dpkg, поэтому автоматическая установка недоступна. "
+            f"Откройте пакет вручную:\n{path}"
+        )
+
+    try:
+        result = subprocess.run(
+            [pkexec, dpkg, "-i", str(path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Установка не завершилась за 5 минут и была прервана."
+    except OSError as exc:
+        return False, f"Не удалось запустить установку:\n{exc}"
+
+    if result.returncode == 0:
+        return True, ""
+
+    output = (result.stdout or "").strip()
+    if result.returncode in (126, 127):
+        return False, "Установка отменена: не удалось подтвердить права администратора."
+    message = f"dpkg завершился с кодом {result.returncode}."
+    if output:
+        message += "\n\n" + output[-1200:]
+    return False, message
+
+
+def restart_after_exit() -> tuple[bool, str]:
+    """Запускает установленную версию после выхода текущего процесса.
+
+    Новый процесс не должен стартовать раньше старого: иначе он лишь
+    активирует уже запущенное приложение. Небольшой помощник ждёт, пока
+    завершится текущий PID, и только потом запускает редактор.
+    """
+    if platform_kind() != "linux":
+        return False, "Перезапуск после обновления доступен только в Linux."
+
+    entry = Path("/usr/lib/eves-text/eves-text")
+    if entry.is_file():
+        command = [str(entry)]
+    else:
+        executable = shutil.which("eves-text")
+        command = [executable] if executable else [sys.executable, "-m", "eves_text"]
+
+    waiter = (
+        'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; '
+        'shift; exec "$@"'
+    )
+    try:
+        subprocess.Popen(
+            ["/bin/sh", "-c", waiter, "eves-text-update", str(os.getpid()), *command],
+            cwd=str(Path.home()),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return False, f"Не удалось перезапустить приложение:\n{exc}"
+    return True, ""
