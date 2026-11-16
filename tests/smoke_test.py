@@ -195,6 +195,14 @@ def test_caret_blinker() -> None:
     window.destroy()
 
 
+def test_app_logo() -> None:
+    from eves_text.window import app_logo
+
+    logo = app_logo()
+    assert logo is not None
+    assert logo.get_width() > 0 and logo.get_height() > 0
+
+
 def test_dark_scheme() -> None:
     manager = GtkSource.StyleSchemeManager.get_default()
     styles_dir = str(ROOT / "eves_text" / "resources" / "styles")
@@ -422,6 +430,7 @@ if __name__ == "__main__":
     test_updates()
     test_win_theme()
     test_caret_blinker()
+    test_app_logo()
     test_dark_scheme()
     test_windows_installer()
     test_linux_installer()

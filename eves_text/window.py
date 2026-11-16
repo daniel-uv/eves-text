@@ -13,7 +13,16 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkSource", "4")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gio, GLib, Gtk, GtkSource, Pango  # noqa: E402
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import (  # noqa: E402
+    Gdk,
+    GdkPixbuf,
+    Gio,
+    GLib,
+    Gtk,
+    GtkSource,
+    Pango,
+)
 
 from . import __version__, ai_check, document, updates, win_theme  # noqa: E402
 from . import settings as user_settings  # noqa: E402
@@ -103,6 +112,20 @@ def app_icon_name() -> str:
     if theme is not None and theme.has_icon("eves-text"):
         return "eves-text"
     return "accessories-text-editor"
+
+
+def app_logo() -> GdkPixbuf.Pixbuf | None:
+    """Иконка приложения из ресурсов для диалога «О программе»."""
+    resources = Path(__file__).parent / "resources"
+    for name in ("eves-text.png", "eves-text.svg"):
+        path = resources / name
+        if not path.is_file():
+            continue
+        try:
+            return GdkPixbuf.Pixbuf.new_from_file(str(path))
+        except (GLib.Error, OSError):
+            continue
+    return None
 
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -1979,10 +2002,12 @@ class MainWindow(Gtk.ApplicationWindow):
         dialog.set_program_name(APP_NAME)
         dialog.set_version(__version__)
         dialog.set_comments(
-            "Простой текстовый редактор с проверкой орфографии.\n"
-            "Есть проверка с ИИ через Ollama: выделите текст, правый клик →\n"
-            "«Проверить с ИИ». Модель скачивается вручную в меню «ИИ»."
+            "Текстовый редактор для русского языка с проверкой орфографии.\n"
+            "Проверка с ИИ: выделите текст → правый клик → «Проверить с ИИ»."
         )
+        logo = app_logo()
+        if logo is not None:
+            dialog.set_logo(logo)
         dialog.set_icon_name(self._icon_name)
         dialog.set_license_type(Gtk.License.MIT_X11)
         dialog.run()
