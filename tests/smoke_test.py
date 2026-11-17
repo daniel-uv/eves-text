@@ -221,6 +221,19 @@ def test_dark_scheme() -> None:
     assert current is not None
     assert current.get_property("background") == "#4a4a4a"
 
+    # Полосы, чей фон задаёт GTK, должны краситься и без тёмной темы GTK
+    # (так бывает в Windows-бандле, если Adwaita-dark не нашлась).
+    css = (ROOT / "eves_text" / "resources" / "style.css").read_text(encoding="utf-8")
+    for selector in (
+        ".dark-theme menubar",
+        ".dark-theme .bottom-bar",
+        ".dark-theme .statusbar",
+    ):
+        assert selector in css
+
+    build = (ROOT / "windows" / "build-portable.sh").read_text(encoding="utf-8")
+    assert "Adwaita-dark" in build
+
 
 def test_windows_installer() -> None:
     import ctypes

@@ -68,6 +68,15 @@ if command -v glib-compile-schemas >/dev/null 2>&1; then
     ( cd "$DIST/share/glib-2.0/schemas" && glib-compile-schemas . )
 fi
 
+# Без файлов тем GTK на Windows не найдёт Adwaita-dark: меню и нижние панели
+# останутся светлыми после переключения на тёмную тему.
+mkdir -p "$DIST/share/themes"
+for theme in Adwaita Adwaita-dark; do
+    if [ -d "$PREFIX/share/themes/$theme" ]; then
+        cp -a "$PREFIX/share/themes/$theme" "$DIST/share/themes/"
+    fi
+done
+
 # Подсветка синтаксиса и стили GtkSourceView (oblivion/kate и т.д.).
 if [ -d "$PREFIX/share/gtksourceview-4" ]; then
     cp -a "$PREFIX/share/gtksourceview-4" "$DIST/share/"

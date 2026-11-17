@@ -487,7 +487,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self._connect_signals()
         self._install_focus_handling()
         self.connect("destroy", self._on_destroy)
-        if self._theme_preference is not None:
+        # В Windows системная GTK-тема не знает о тёмном варианте, поэтому
+        # синхронизируем её и при следовании системной теме.
+        if self._theme_preference is not None or os.name == "nt":
             self._sync_gtk_theme()
         self._apply_style_scheme()
         self._update_title()
@@ -2362,6 +2364,8 @@ class MainWindow(Gtk.ApplicationWindow):
         if dark == self._dark_theme:
             return
         self._dark_theme = dark
+        if os.name == "nt":
+            self._sync_gtk_theme()
         self._apply_style_scheme()
 
     def _apply_style_scheme(self) -> None:

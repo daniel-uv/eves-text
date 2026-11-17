@@ -17,6 +17,38 @@ headerbar.app-titlebar {
   color: #e3e3e3;
 }
 
+/* В Windows GTK-тема может остаться светлой: красим полосы сами,
+   чтобы тёмная тема применялась и к меню, и к нижним панелям. */
+
+.dark-theme menubar {
+  background-color: #1f2020;
+  background-image: none;
+  color: #e3e3e3;
+}
+
+.dark-theme menubar menuitem,
+.dark-theme menubar menuitem label {
+  color: #e3e3e3;
+}
+
+.dark-theme menuitem:selected,
+.dark-theme menuitem:active {
+  background-color: #3a3a3a;
+}
+
+.dark-theme .bottom-bar,
+.dark-theme .statusbar {
+  background-color: #1f2020;
+  background-image: none;
+  border-top-color: #3a3a3a;
+  color: #c7c7c7;
+}
+
+.dark-theme .statusbar label {
+  color: #c7c7c7;
+  opacity: 1;
+}
+
 .statusbar {
   padding: 4px 10px;
   border-top: 1px solid @borders;
