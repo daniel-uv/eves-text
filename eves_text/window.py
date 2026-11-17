@@ -229,18 +229,18 @@ class DocumentTab:
     # Коэффициент для четверти окружности Безье.
     _KAPPA = 0.5522847498
 
-    def _tab_colors(self) -> tuple[tuple[float, float, float], ...]:
-        """Цвета вкладок: поле ввода/активная вкладка, наведение, разделитель."""
+    def _tab_colors(
+        self,
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        """Цвет активной вкладки (как поле ввода) и цвет наведения."""
         if getattr(self.window, "_dark_theme", False):
             return (
                 (0x2B / 255, 0x2B / 255, 0x2B / 255),
                 (0x30 / 255, 0x31 / 255, 0x34 / 255),
-                (0x3C / 255, 0x3C / 255, 0x3C / 255),
             )
         return (
             (0xFF / 255, 0xFF / 255, 0xFF / 255),
             (0xE8 / 255, 0xEA / 255, 0xED / 255),
-            (0xB4 / 255, 0xB8 / 255, 0xBD / 255),
         )
 
     @property
@@ -288,45 +288,21 @@ class DocumentTab:
 
         active = widget.get_style_context().has_class("active")
         dragging = self.window._drag_tab is self
-        input_color, hover_color, separator_color = self._tab_colors()
-        self._tab_shape(cr, width, height)
+        input_color, hover_color = self._tab_colors()
         if active:
             # Активная вкладка — цвет поля ввода и сливается с документом.
+            self._tab_shape(cr, width, height)
             cr.set_source_rgb(*input_color)
             cr.fill()
-        else:
-            # Неактивная вкладка прозрачна: видна только обводка цветом поля
-            # ввода, поэтому её форма читается, но не выглядит активной.
-            cr.set_line_width(2.0 if (self.hovered or dragging) else 1.5)
+        elif self.hovered or dragging:
+            # Неактивная вкладка в покое не рисуется вовсе: видны только текст
+            # и крестик. Подсвечивается она лишь под курсором, как в Chrome.
+            self._tab_shape(cr, width, height)
+            cr.set_source_rgb(*hover_color)
+            cr.fill()
             if dragging:
-                cr.set_source_rgb(*self._tab_accent())
-            else:
-                cr.set_source_rgb(*(hover_color if self.hovered else input_color))
-            cr.stroke()
-
-        # Разделитель как в Chrome: короткая скруглённая полоска между
-        # неактивными вкладками. Рядом с активной вкладкой линии нет.
-        if not active and not self.hovered:
-            tabs = self.window._tabs
-            try:
-                index = tabs.index(self)
-            except ValueError:
-                index = -1
-            next_tab = tabs[index + 1] if 0 <= index < len(tabs) - 1 else None
-            # Рядом с активной или подсвеченной вкладкой линии нет — как в Chrome.
-            next_plain = next_tab is None or (
-                not next_tab.tab.get_style_context().has_class("active")
-                and not next_tab.hovered
-            )
-            if next_plain:
-                foot = height * 0.2
-                sep_height = max(8.0, height * 0.48)
-                top = (height - foot - sep_height) / 2
                 cr.set_line_width(2.0)
-                cr.set_line_cap(1)  # cairo.LINE_CAP_ROUND
-                cr.set_source_rgb(*separator_color)
-                cr.move_to(width - 3, top)
-                cr.line_to(width - 3, top + sep_height)
+                cr.set_source_rgb(*self._tab_accent())
                 cr.stroke()
         return False
 
