@@ -260,9 +260,17 @@ class MainWindow(Gtk.ApplicationWindow):
 
         content.pack_start(Gtk.Label(label="Шрифт:"), False, False, 0)
 
+        # Плюс и минус стоят рядом, сразу за ними — поле с размером шрифта.
+        font_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self.font_larger = self._tool_button("zoom-in-symbolic", "Увеличить шрифт")
+        self.font_larger.connect("clicked", lambda *_: self._change_font_size(1))
+        font_buttons.pack_start(self.font_larger, False, False, 0)
+
         self.font_smaller = self._tool_button("zoom-out-symbolic", "Уменьшить шрифт")
         self.font_smaller.connect("clicked", lambda *_: self._change_font_size(-1))
-        content.pack_start(self.font_smaller, False, False, 0)
+        font_buttons.pack_start(self.font_smaller, False, False, 0)
+
+        content.pack_start(font_buttons, False, False, 0)
 
         self.font_size_spin = Gtk.SpinButton.new_with_range(8, 48, 1)
         self.font_size_spin.set_value(DEFAULT_FONT_SIZE)
@@ -271,10 +279,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self.font_size_spin.set_tooltip_text("Размер шрифта")
         self.font_size_spin.connect("value-changed", self._on_font_size_changed)
         content.pack_start(self.font_size_spin, False, False, 0)
-
-        self.font_larger = self._tool_button("zoom-in-symbolic", "Увеличить шрифт")
-        self.font_larger.connect("clicked", lambda *_: self._change_font_size(1))
-        content.pack_start(self.font_larger, False, False, 0)
 
         content.pack_start(
             Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4
