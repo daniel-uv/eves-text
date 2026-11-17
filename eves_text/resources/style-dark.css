@@ -78,3 +78,16 @@ dialog actionbar {
   background-color: #1f2020;
   color: #e3e3e3;
 }
+
+/* Полоса вкладок должна быть темнее поля ввода и неактивных вкладок:
+   иначе неактивная вкладка сливается с полосой. Этот провайдер имеет
+   больший приоритет, чем style.css, поэтому правило перекрывает цвет
+   scrolledwindow выше. */
+.dark-theme .tab-strip-row,
+.dark-theme .tab-strip-scroller,
+.dark-theme .tab-strip-scroller scrolledwindow,
+.dark-theme .tab-strip-scroller viewport,
+.dark-theme .tab-strip-scroller viewport.frame {
+  background-color: #1f2020;
+  background-image: none;
+}
