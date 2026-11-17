@@ -47,6 +47,32 @@ ALIGNMENTS: tuple[tuple[str, str, Gtk.Justification, str], ...] = (
 
 DEFAULT_FONT_SIZE = 12
 
+# Класс, который ставим на кнопку вручную: в GTK3 псевдокласс :hover
+# не всегда применяется (например, в Windows-бандле), поэтому подсветку
+# задаём аварийным классом и не полагаемся только на CSS.
+HOVER_CLASS = "force-hover"
+
+
+def _on_hover_enter(widget: Gtk.Widget, _event: Gdk.EventButton) -> bool:
+    widget.get_style_context().add_class(HOVER_CLASS)
+    return False
+
+
+def _on_hover_leave(widget: Gtk.Widget, _event: Gdk.EventButton) -> bool:
+    widget.get_style_context().remove_class(HOVER_CLASS)
+    return False
+
+
+def install_hover(widget: Gtk.Widget) -> Gtk.Widget:
+    """Надёжно подсвечивать кнопку, пока под ней курсор."""
+    widget.add_events(
+        Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK
+    )
+    widget.connect("enter-notify-event", _on_hover_enter)
+    widget.connect("leave-notify-event", _on_hover_leave)
+    return widget
+
+
 # Порог в пикселях, после которого нажатие считается перетаскиванием.
 TAB_DRAG_THRESHOLD = 6
 
@@ -188,6 +214,7 @@ class DocumentTab:
         close.set_focus_on_click(False)
         close.set_tooltip_text("Закрыть вкладку")
         close.get_style_context().add_class("tab-close")
+        install_hover(close)
         close.connect("clicked", lambda *_: window.close_tab(self))
         self.close_button = close
 
@@ -282,6 +309,11 @@ class DocumentTab:
         cr.curve_to(foot, radius - kr, foot + radius - kr, 0, foot + radius, 0)
         cr.close_path()
 
+    def _close_hover_rgba(self) -> tuple[float, float, float, float]:
+        if getattr(self.window, "_dark_theme", False):
+            return (1.0, 1.0, 1.0, 0.14)
+        return (32 / 255, 33 / 255, 36 / 255, 0.14)
+
     def _draw_tab(self, widget, cr) -> bool:
         width = widget.get_allocated_width()
         height = widget.get_allocated_height()
@@ -306,6 +338,18 @@ class DocumentTab:
                 cr.set_line_width(2.0)
                 cr.set_source_rgb(*self._tab_accent())
                 cr.stroke()
+
+        # Крестик сидит внутри EventBox, и GTK не всегда рисует ему фон из CSS.
+        # Рисуем подсветку сами поверх заливки вкладки, но под самой иконкой.
+        if self._pointer_in_close:
+            area = self.close_button.get_allocation()
+            x = area.x + area.width / 2
+            y = area.y + area.height / 2
+            radius = min(area.width, area.height) / 2
+            cr.new_path()
+            cr.arc(x, y, radius, 0, 2 * 3.141592653589793)
+            cr.set_source_rgba(*self._close_hover_rgba())
+            cr.fill()
         return False
 
     def _update_close_visibility(self) -> None:
@@ -1107,6 +1151,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.new_tab_button.set_relief(Gtk.ReliefStyle.NONE)
         self.new_tab_button.set_tooltip_text("Новая вкладка (Ctrl+N)")
         self.new_tab_button.get_style_context().add_class("new-tab")
+        install_hover(self.new_tab_button)
         self.new_tab_button.connect("clicked", lambda *_: self.action_new())
         self.tab_bar.pack_start(self.new_tab_button, False, False, 0)
 
@@ -1175,6 +1220,7 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         self.empty_new_button.set_always_show_image(True)
         self.empty_new_button.get_style_context().add_class("empty-state-button")
+        install_hover(self.empty_new_button)
         self.empty_new_button.connect("clicked", lambda *_: self.action_new())
 
         self.empty_open_button = Gtk.Button(label="Открыть существующий")
@@ -1185,6 +1231,7 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         self.empty_open_button.set_always_show_image(True)
         self.empty_open_button.get_style_context().add_class("empty-state-button")
+        install_hover(self.empty_open_button)
         self.empty_open_button.connect("clicked", lambda *_: self.action_open())
 
         buttons.pack_start(self.empty_new_button, False, False, 0)
@@ -1235,6 +1282,7 @@ class MainWindow(Gtk.ApplicationWindow):
             )
             button.set_tooltip_text(tooltip)
             button.set_active(key == self._default_align)
+            install_hover(button)
             button.connect("toggled", self._on_alignment_toggled, key)
             content.pack_start(button, False, False, 0)
             self.align_buttons[key] = button
@@ -1245,6 +1293,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self.ai_button = Gtk.Button(label="Выключить ИИ")
         self.ai_button.set_relief(Gtk.ReliefStyle.NONE)
+        install_hover(self.ai_button)
         self.ai_button.connect("clicked", lambda *_: self._toggle_ai())
         content.pack_start(self.ai_button, False, False, 0)
         self._update_ai_button()
@@ -1258,7 +1307,7 @@ class MainWindow(Gtk.ApplicationWindow):
         button.set_relief(Gtk.ReliefStyle.NONE)
         button.set_image(Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.SMALL_TOOLBAR))
         button.set_tooltip_text(tooltip)
-        return button
+        return install_hover(button)
 
     def _build_menubar(self) -> Gtk.MenuBar:
         menubar = Gtk.MenuBar()
@@ -1383,6 +1432,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.version_button.set_relief(Gtk.ReliefStyle.NONE)
         self.version_button.set_tooltip_text("Проверить обновления")
         self.version_button.get_style_context().add_class("version-button")
+        install_hover(self.version_button)
         self.version_button.connect("clicked", self.action_check_updates)
         bar.pack_end(self.version_button, False, False, 0)
         return bar

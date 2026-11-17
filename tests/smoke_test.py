@@ -597,10 +597,27 @@ def test_window() -> Application:
     # Нажатие сделало вкладку активной — вернём вторую для следующих проверок.
     window._select_tab(second)
 
+    # Подсветка кнопок не зависит от псевдокласса :hover: проверяем, что
+    # обработчики наведения ставят и снимают аварийный CSS-класс.
+    from eves_text.window import DEFAULT_FONT_SIZE, HOVER_CLASS, FontSizeEntry
+
+    enter = Gdk.Event.new(Gdk.EventType.ENTER_NOTIFY)
+    leave = Gdk.Event.new(Gdk.EventType.LEAVE_NOTIFY)
+    for button in (
+        window.font_larger,
+        window.font_smaller,
+        window.align_buttons["left"],
+        window.ai_button,
+        window.new_tab_button,
+        window._active_tab.close_button,
+    ):
+        button.emit("enter-notify-event", enter)
+        assert button.get_style_context().has_class(HOVER_CLASS)
+        button.emit("leave-notify-event", leave)
+        assert not button.get_style_context().has_class(HOVER_CLASS)
+
     # У размера шрифта нет встроенных стрелок, которые проявлялись при нажатии
     # и дублировали кнопки «−» и «+». Работают только видимые кнопки и ввод.
-    from eves_text.window import DEFAULT_FONT_SIZE, FontSizeEntry
-
     assert isinstance(window.font_size_spin, FontSizeEntry)
     assert not isinstance(window.font_size_spin, Gtk.SpinButton)
     assert window.font_size_spin.get_value() == DEFAULT_FONT_SIZE

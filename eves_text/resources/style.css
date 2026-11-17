@@ -87,7 +87,8 @@ radiomenuitem:selected {
   opacity: 0.7;
 }
 
-.version-button:hover {
+.version-button:hover,
+.version-button.force-hover {
   opacity: 1;
   text-decoration: underline;
 }
@@ -115,11 +116,13 @@ radiomenuitem:selected {
   color: #c7c7c7;
 }
 
-.bottom-bar button:hover {
+.bottom-bar button:hover,
+.bottom-bar button.force-hover {
   background-color: rgba(32, 33, 36, 0.12);
 }
 
-.dark-theme .bottom-bar button:hover {
+.dark-theme .bottom-bar button:hover,
+.dark-theme .bottom-bar button.force-hover {
   background-color: rgba(255, 255, 255, 0.12);
 }
 
@@ -205,11 +208,13 @@ radiomenuitem:selected {
   color: #e3e3e3;
 }
 
-.empty-state button:hover {
+.empty-state button:hover,
+.empty-state button.force-hover {
   background-color: #f1f3f4;
 }
 
-.dark-theme .empty-state button:hover {
+.dark-theme .empty-state button:hover,
+.dark-theme .empty-state button.force-hover {
   background-color: #3c4043;
 }
 
@@ -258,11 +263,13 @@ radiomenuitem:selected {
   color: #c7c7c7;
 }
 
-.new-tab:hover {
+.new-tab:hover,
+.new-tab.force-hover {
   background-color: rgba(32, 33, 36, 0.12);
 }
 
-.dark-theme .new-tab:hover {
+.dark-theme .new-tab:hover,
+.dark-theme .new-tab.force-hover {
   background-color: rgba(255, 255, 255, 0.12);
 }
 
@@ -289,11 +296,13 @@ radiomenuitem:selected {
   color: #e3e3e3;
 }
 
-.tab-close:hover {
+.tab-close:hover,
+.tab-close.force-hover {
   background-color: rgba(32, 33, 36, 0.14);
   border-radius: 9px;
 }
 
-.dark-theme .tab-close:hover {
+.dark-theme .tab-close:hover,
+.dark-theme .tab-close.force-hover {
   background-color: rgba(255, 255, 255, 0.14);
 }
