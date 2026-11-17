@@ -141,6 +141,8 @@ class DocumentTab:
         self.align_guard = False
         self.popup_iter: Gtk.TextIter | None = None
         self.caret: CaretBlinker | None = None
+        self._pointer_in_tab = False
+        self._pointer_in_close = False
 
         self.buffer = GtkSource.Buffer()
         self.buffer.set_highlight_syntax(False)
@@ -181,9 +183,9 @@ class DocumentTab:
 
         # Отступы внутри вкладки задаём полям содержимого: Gtk.EventBox
         # не применяет CSS-padding к дочернему виджету.
-        self.label_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.label_box.set_margin_start(12)
-        self.label_box.set_margin_end(10)
+        self.label_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.label_box.set_margin_start(14)
+        self.label_box.set_margin_end(12)
         self.label_box.set_margin_top(1)
         self.label_box.set_margin_bottom(1)
         self.label_box.pack_start(self.name_label, False, False, 0)
@@ -195,10 +197,143 @@ class DocumentTab:
         self.tab.get_style_context().add_class("doc-tab")
         self.tab.add(self.label_box)
         self.tab.connect("button-press-event", self._on_clicked)
+        self.tab.connect("enter-notify-event", self._on_tab_enter)
+        self.tab.connect("leave-notify-event", self._on_tab_leave)
+        self.tab.connect("draw", self._draw_tab)
+        close.connect("enter-notify-event", self._on_close_enter)
+        close.connect("leave-notify-event", self._on_close_leave)
         self.tab.set_tooltip_text("Новый документ")
         self.tab.show_all()
+        self._update_close_visibility()
 
         self.scroller.show_all()
+
+    # ------------------------------------------------------------- оформление
+
+    # Коэффициент для четверти окружности Безье.
+    _KAPPA = 0.5522847498
+
+    def _tab_colors(self) -> tuple[tuple[float, float, float], ...]:
+        """Цвета вкладок в стиле Chrome: активная, наведение, разделитель."""
+        if getattr(self.window, "_dark_theme", False):
+            return (
+                (0x2B / 255, 0x2B / 255, 0x2B / 255),
+                (0x28 / 255, 0x28 / 255, 0x28 / 255),
+                (0x3C / 255, 0x3C / 255, 0x3C / 255),
+            )
+        return (
+            (0xFF / 255, 0xFF / 255, 0xFF / 255),
+            (0xF1 / 255, 0xF3 / 255, 0xF4 / 255),
+            (0xB4 / 255, 0xB8 / 255, 0xBD / 255),
+        )
+
+    @property
+    def hovered(self) -> bool:
+        return self._pointer_in_tab or self._pointer_in_close
+
+    def _tab_shape(self, cr, width: float, height: float) -> None:
+        """Форма вкладки Chrome: скруглённый верх и расходящиеся книзу лапки."""
+        foot = height * 0.2
+        radius = min(height * 0.3, width / 2 - foot - 1)
+        radius = max(radius, 0.0)
+        kf = foot * self._KAPPA
+        kr = radius * self._KAPPA
+        right = width - foot
+
+        cr.new_path()
+        cr.move_to(foot + radius, 0)
+        cr.line_to(width - foot - radius, 0)
+        cr.curve_to(
+            width - foot - radius + kr, 0,
+            right, radius - kr,
+            right, radius,
+        )
+        cr.line_to(right, height - foot)
+        cr.curve_to(right, height - foot + kf, width - kf, height, width, height)
+        cr.line_to(0, height)
+        cr.curve_to(kf, height, 0, height - foot + kf, 0, height - foot)
+        cr.line_to(foot, radius)
+        cr.curve_to(foot, radius - kr, foot + radius - kr, 0, foot + radius, 0)
+        cr.close_path()
+
+    def _draw_tab(self, widget, cr) -> bool:
+        width = widget.get_allocated_width()
+        height = widget.get_allocated_height()
+        if width < 8 or height < 8:
+            return False
+
+        active = widget.get_style_context().has_class("active")
+        active_color, hover_color, separator_color = self._tab_colors()
+        if active or self.hovered:
+            self._tab_shape(cr, width, height)
+            cr.set_source_rgb(*(active_color if active else hover_color))
+            cr.fill()
+
+        # Разделитель как в Chrome: короткая скруглённая полоска между
+        # неактивными вкладками. Рядом с активной вкладкой линии нет.
+        if not active and not self.hovered:
+            tabs = self.window._tabs
+            try:
+                index = tabs.index(self)
+            except ValueError:
+                index = -1
+            next_tab = tabs[index + 1] if 0 <= index < len(tabs) - 1 else None
+            # Рядом с активной или подсвеченной вкладкой линии нет — как в Chrome.
+            next_plain = next_tab is None or (
+                not next_tab.tab.get_style_context().has_class("active")
+                and not next_tab.hovered
+            )
+            if next_plain:
+                foot = height * 0.2
+                sep_height = max(8.0, height * 0.48)
+                top = (height - foot - sep_height) / 2
+                cr.set_line_width(2.0)
+                cr.set_line_cap(1)  # cairo.LINE_CAP_ROUND
+                cr.set_source_rgb(*separator_color)
+                cr.move_to(width - 3, top)
+                cr.line_to(width - 3, top + sep_height)
+                cr.stroke()
+        return False
+
+    def _update_close_visibility(self) -> None:
+        active = self.tab.get_style_context().has_class("active")
+        self.close_button.set_opacity(
+            0.9 if active or self.hovered else 0.0
+        )
+
+    def refresh_visuals(self) -> None:
+        """Перерисовать форму и крестик после смены активной вкладки/темы."""
+        self._update_close_visibility()
+        self.tab.queue_draw()
+        # Разделители у соседей зависят от активности и наведения этой вкладки.
+        tabs = self.window._tabs
+        try:
+            index = tabs.index(self)
+        except ValueError:
+            return
+        for neighbor in (index - 1, index + 1):
+            if 0 <= neighbor < len(tabs):
+                tabs[neighbor].tab.queue_draw()
+
+    def _on_tab_enter(self, *_args) -> bool:
+        self._pointer_in_tab = True
+        self.refresh_visuals()
+        return False
+
+    def _on_tab_leave(self, *_args) -> bool:
+        self._pointer_in_tab = False
+        self.refresh_visuals()
+        return False
+
+    def _on_close_enter(self, *_args) -> bool:
+        self._pointer_in_close = True
+        self.refresh_visuals()
+        return False
+
+    def _on_close_leave(self, *_args) -> bool:
+        self._pointer_in_close = False
+        self.refresh_visuals()
+        return False
 
     def _on_clicked(self, _widget, event) -> bool:
         if event.button == 1:
@@ -454,6 +589,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 context.add_class("active")
             else:
                 context.remove_class("active")
+            candidate.refresh_visuals()
         self._update_title()
         self.enc_label.set_text(tab.encoding)
         self._update_status()
@@ -528,7 +664,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self.tab_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.tab_bar.get_style_context().add_class("tab-strip")
 
-        self.new_tab_button = Gtk.Button(label="+")
+        self.new_tab_button = Gtk.Button.new_from_icon_name(
+            "list-add-symbolic", Gtk.IconSize.MENU
+        )
         self.new_tab_button.set_relief(Gtk.ReliefStyle.NONE)
         self.new_tab_button.set_tooltip_text("Новая вкладка (Ctrl+N)")
         self.new_tab_button.get_style_context().add_class("new-tab")
@@ -2082,6 +2220,8 @@ class MainWindow(Gtk.ApplicationWindow):
         if scheme is not None:
             for tab in self._tabs:
                 tab.buffer.set_style_scheme(scheme)
+        for tab in self._tabs:
+            tab.refresh_visuals()
         self._apply_windows_titlebar()
 
     def _on_map(self, *_args) -> None:

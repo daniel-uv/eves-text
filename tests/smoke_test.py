@@ -14,7 +14,7 @@ import gi  # noqa: E402
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkSource", "4")
-from gi.repository import Gio, Gtk, GtkSource  # noqa: E402
+from gi.repository import Gio, Gtk, Gdk, GtkSource  # noqa: E402
 
 Gtk.init_check(None)
 
@@ -434,9 +434,18 @@ def test_window() -> None:
     # Текст внутри вкладки не прилипает к краям, справа от крестика есть зазор.
     assert second.label_box.get_margin_start() >= 12
     assert second.label_box.get_margin_end() >= 10
-    assert second.label_box.get_spacing() >= 8
+    assert second.label_box.get_spacing() >= 6
     assert second.tab.get_style_context().has_class("active")
     assert not first.tab.get_style_context().has_class("active")
+    # При наведении неактивная вкладка подсвечивается и показывает крестик.
+    assert second.close_button.get_opacity() > 0.8
+    assert first.close_button.get_opacity() == 0.0
+    first.tab.emit("enter-notify-event", Gdk.Event.new(Gdk.EventType.ENTER_NOTIFY))
+    assert first.hovered is True
+    assert first.close_button.get_opacity() > 0.8
+    first.tab.emit("leave-notify-event", Gdk.Event.new(Gdk.EventType.LEAVE_NOTIFY))
+    assert first.hovered is False
+    assert first.close_button.get_opacity() == 0.0
     # «+» — последний элемент полосы, сразу за вкладками.
     assert window.tab_bar.get_children()[-1] is window.new_tab_button
     window.set_text("Второй документ", Path("/tmp/второй.txt"))

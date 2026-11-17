@@ -58,9 +58,13 @@
   color: transparent;
 }
 
-/* Полоса вкладок: «+» стоит сразу за последней вкладкой. */
+/* Полоса вкладок в стиле Chrome: серая полоса, вкладки без рамок. */
 .tab-strip-row {
-  background-color: alpha(@theme_fg_color, 0.04);
+  background-color: #dee1e6;
+}
+
+.dark-theme .tab-strip-row {
+  background-color: #1f2020;
 }
 
 .tab-strip-scroller {
@@ -68,44 +72,60 @@
 }
 
 .tab-strip {
-  padding: 2px 4px 0;
+  padding: 4px 8px 0;
 }
 
-/* Вкладка — скруглённая плашка, активная выделена светлее. */
+/* Фон вкладки рисуется по форме Chrome в window.py: скруглённый верх,
+   расходящиеся книзу «лапки», неактивные вкладки прозрачные. */
 .doc-tab {
-  min-height: 24px;
-  margin: 3px 2px 2px;
-  border: 1px solid alpha(@borders, 0.9);
-  border-radius: 8px;
-  background-color: alpha(@theme_fg_color, 0.05);
+  min-height: 32px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
 }
 
-.doc-tab:hover {
-  background-color: alpha(@theme_fg_color, 0.10);
+.doc-tab label {
+  font-size: 95%;
+  color: #5f6368;
 }
 
-/* Активная вкладка сливается с документом: нижней грани нет,
-   снизу углы прямые, фон совпадает с фоном страницы. */
-.doc-tab.active {
-  margin-bottom: 0;
-  background-color: @theme_base_color;
-  border-color: alpha(@theme_fg_color, 0.35);
-  border-bottom-style: none;
-  border-radius: 8px 8px 0 0;
+.doc-tab.active label {
+  color: #202124;
 }
 
-/* В тёмной теме фон редактора — #2b2b2b (схема eves-dark). */
-.dark-theme .doc-tab.active {
-  background-color: #2b2b2b;
+.dark-theme .doc-tab label {
+  color: #c7c7c7;
 }
 
-/* Кнопка «+» вплотную к последней вкладке. */
+.dark-theme .doc-tab.active label {
+  color: #e3e3e3;
+}
+
+/* Плоская кнопка «+» сразу за последней вкладкой. */
 .new-tab {
-  min-width: 24px;
-  min-height: 22px;
-  margin: 3px 2px;
-  padding: 0 6px;
-  border-radius: 8px;
+  min-width: 28px;
+  min-height: 28px;
+  margin: 2px 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  border-radius: 14px;
+  color: #5f6368;
+}
+
+.dark-theme .new-tab {
+  color: #c7c7c7;
+}
+
+.new-tab:hover {
+  background-color: alpha(@theme_fg_color, 0.12);
+}
+
+.new-tab:active {
+  background-color: alpha(@theme_fg_color, 0.20);
 }
 
 .tab-close {
@@ -116,6 +136,11 @@
   border: none;
   background: none;
   box-shadow: none;
+  color: #5f6368;
+}
+
+.dark-theme .tab-close {
+  color: #e3e3e3;
 }
 
 .tab-close:hover {
