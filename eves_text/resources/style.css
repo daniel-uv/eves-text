@@ -37,3 +37,17 @@
 .bottom-bar spinbutton {
   min-height: 22px;
 }
+
+/* У поля размера шрифта уже есть свои кнопки «−» и «+»,
+   поэтому встроенные кнопки спинора скрываем. */
+.bottom-bar spinbutton button.down,
+.bottom-bar spinbutton button.up {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: transparent;
+}
