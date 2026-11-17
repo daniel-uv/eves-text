@@ -644,6 +644,10 @@ class MainWindow(Gtk.ApplicationWindow):
         tab = DocumentTab(self, self._doc_counter)
         tab.spellcheck.set_enabled(self._spell_check)
         self._tabs.append(tab)
+        self.tab_strip_row.show_all()
+        self.bottom_bar.show_all()
+        self.empty_state.hide()
+        self._set_document_actions_enabled(True)
         self.tab_bar.pack_start(tab.tab, False, True, 0)
         # Все дети полосы упакованы через pack_start: так reorder_child
         # считает позиции обычным порядком, а «+» остаётся последним.
@@ -959,14 +963,62 @@ class MainWindow(Gtk.ApplicationWindow):
         self.stack.remove(tab.scroller)
 
         if not self._tabs:
-            # Окно не должно остаться без документа.
-            self._create_tab()
+            # Вместо нового чистого листа показываем экран с действиями:
+            # пользователь сам решит, создать документ или открыть файл.
+            self._show_empty_state()
             return True
 
         if self._active_tab is tab:
             self._active_tab = None
             self._select_tab(self._tabs[min(index, len(self._tabs) - 1)])
         return True
+
+    def _set_document_actions_enabled(self, enabled: bool) -> None:
+        """Не давать команды работы с текстом, когда вкладок нет."""
+        names = (
+            "close-tab",
+            "next-tab",
+            "prev-tab",
+            "save",
+            "save-as",
+            "undo",
+            "redo",
+            "cut",
+            "copy",
+            "paste",
+            "delete",
+            "select-all",
+            "wrap",
+            "line-numbers",
+            "highlight-line",
+            "spell-check",
+        )
+        for name in names:
+            action = self.lookup_action(name)
+            if action is not None:
+                action.set_enabled(enabled)
+        if not enabled:
+            return
+        spell_action = self.lookup_action("spell-check")
+        if spell_action is not None and self._tabs:
+            spell_action.set_enabled(
+                self._spell_check and self._tabs[0].spellcheck.available
+            )
+        self._update_undo()
+
+    def _show_empty_state(self) -> None:
+        """Показать приглашение создать или открыть документ."""
+        self._active_tab = None
+        self.empty_state.show_all()
+        self.stack.set_visible_child_name("empty")
+        self.tab_strip_row.hide()
+        self.bottom_bar.hide()
+        self._set_document_actions_enabled(False)
+        self._update_title()
+        self._update_status()
+        self._update_counts()
+        self.enc_label.set_text("")
+        self.empty_new_button.grab_focus()
 
     def _pristine_tab(self) -> DocumentTab | None:
         if self._active_tab is not None and self._active_tab.is_pristine():
@@ -1008,6 +1060,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # а фон тянется на всю ширину окна.
         strip_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         strip_row.get_style_context().add_class("tab-strip-row")
+        self.tab_strip_row = strip_row
 
         # У самого Box нет своего GDK-окна, поэтому средний клик по свободному
         # месту полосы ловит EventBox, растянутый на всю ширину строки.
@@ -1048,10 +1101,78 @@ class MainWindow(Gtk.ApplicationWindow):
         self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
         self.stack.set_hexpand(True)
         self.stack.set_vexpand(True)
+        self.empty_state = self._build_empty_state()
+        self.stack.add_named(self.empty_state, "empty")
         box.pack_start(self.stack, True, True, 0)
 
-        box.pack_start(self._build_bottom_bar(), False, False, 0)
+        self.bottom_bar = self._build_bottom_bar()
+        box.pack_start(self.bottom_bar, False, False, 0)
         box.pack_start(self._build_statusbar(), False, False, 0)
+
+    def _build_empty_state(self) -> Gtk.Box:
+        """Экран, который показывается, когда закрыты все вкладки."""
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        outer.get_style_context().add_class("empty-state")
+        outer.set_hexpand(True)
+        outer.set_vexpand(True)
+
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        content.set_halign(Gtk.Align.CENTER)
+        content.set_valign(Gtk.Align.CENTER)
+        outer.pack_start(content, True, True, 0)
+
+        logo = app_logo()
+        if logo is not None:
+            image = Gtk.Image.new_from_pixbuf(
+                logo.scale_simple(
+                    96, 96, GdkPixbuf.InterpType.BILINEAR
+                )
+            )
+        else:
+            image = Gtk.Image.new_from_icon_name(
+                app_icon_name(), Gtk.IconSize.DIALOG
+            )
+        image.set_margin_bottom(8)
+        content.pack_start(image, False, False, 0)
+
+        title = Gtk.Label(label="Нет открытых документов")
+        title.get_style_context().add_class("empty-state-title")
+        content.pack_start(title, False, False, 0)
+
+        hint = Gtk.Label(
+            label="Создайте новый документ или откройте существующий файл."
+        )
+        hint.get_style_context().add_class("empty-state-hint")
+        content.pack_start(hint, False, False, 0)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        buttons.set_halign(Gtk.Align.CENTER)
+        buttons.set_margin_top(10)
+
+        self.empty_new_button = Gtk.Button(label="Новый документ")
+        self.empty_new_button.set_image(
+            Gtk.Image.new_from_icon_name(
+                "document-new-symbolic", Gtk.IconSize.BUTTON
+            )
+        )
+        self.empty_new_button.set_always_show_image(True)
+        self.empty_new_button.get_style_context().add_class("empty-state-button")
+        self.empty_new_button.connect("clicked", lambda *_: self.action_new())
+
+        self.empty_open_button = Gtk.Button(label="Открыть существующий")
+        self.empty_open_button.set_image(
+            Gtk.Image.new_from_icon_name(
+                "document-open-symbolic", Gtk.IconSize.BUTTON
+            )
+        )
+        self.empty_open_button.set_always_show_image(True)
+        self.empty_open_button.get_style_context().add_class("empty-state-button")
+        self.empty_open_button.connect("clicked", lambda *_: self.action_open())
+
+        buttons.pack_start(self.empty_new_button, False, False, 0)
+        buttons.pack_start(self.empty_open_button, False, False, 0)
+        content.pack_start(buttons, False, False, 0)
+        return outer
 
     def _build_bottom_bar(self) -> Gtk.Box:
         # Внешняя полоса занимает всю ширину окна и несёт рамку и фон.
@@ -1496,16 +1617,23 @@ class MainWindow(Gtk.ApplicationWindow):
         self.undo_action.set_enabled(self.buffer.can_undo())
         self.redo_action.set_enabled(self.buffer.can_redo())
 
+    def _grab_active_focus(self) -> None:
+        """Фокус в текст, а когда вкладок нет — на кнопку нового документа."""
+        if self._active_tab is not None:
+            self._active_tab.view.grab_focus()
+        else:
+            self.empty_new_button.grab_focus()
+
     def _install_focus_handling(self) -> None:
         """Клавиатурный фокус должен всегда попадать в текст, а не в меню."""
         self.set_focus(self.view)
-        self.connect("map", lambda *_: self.view.grab_focus())
+        self.connect("map", lambda *_: self._grab_active_focus())
         self.connect("window-state-event", self._on_window_state)
 
     def _on_window_state(self, _widget, event) -> bool:
         if event.changed_mask & Gdk.WindowState.FOCUSED and event.new_window_state & Gdk.WindowState.FOCUSED:
             if self.get_focus() is None:
-                self.view.grab_focus()
+                self._grab_active_focus()
         return False
 
     # ------------------------------------------------------------ popup menu
@@ -2962,7 +3090,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _update_status(self) -> None:
         if self._active_tab is None:
-            self.pos_label.set_text("Стр 1, Стлб 1")
+            self.pos_label.set_text("")
             return
         iterator = self.buffer.get_iter_at_mark(self.buffer.get_insert())
         self.pos_label.set_text(

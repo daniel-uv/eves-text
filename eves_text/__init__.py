@@ -1,4 +1,4 @@
 """Eve's Text — простой текстовый редактор на GTK."""
 
-__version__ = "0.6.36"
+__version__ = "0.6.37"
 APP_ID = "org.eves.Text"

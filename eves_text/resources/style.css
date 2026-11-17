@@ -156,6 +156,58 @@ radiomenuitem:selected {
   padding: 4px 8px 0;
 }
 
+/* Экран без вкладок: если закрыть последний документ, окно остаётся с
+   понятными действиями вместо пустого поля. */
+.empty-state {
+  background-color: #ffffff;
+}
+
+.dark-theme .empty-state {
+  background-color: #2b2b2b;
+}
+
+.empty-state-title {
+  font-size: 150%;
+  font-weight: bold;
+  color: #202124;
+}
+
+.dark-theme .empty-state-title {
+  color: #e3e3e3;
+}
+
+.empty-state-hint {
+  color: #5f6368;
+}
+
+.dark-theme .empty-state-hint {
+  color: #9a9a9a;
+}
+
+.empty-state button {
+  min-width: 210px;
+  min-height: 36px;
+  border: 1px solid #dadce0;
+  border-radius: 18px;
+  box-shadow: none;
+  background-color: #ffffff;
+  color: #202124;
+}
+
+.dark-theme .empty-state button {
+  border-color: #3c4043;
+  background-color: #303134;
+  color: #e3e3e3;
+}
+
+.empty-state button:hover {
+  background-color: #f1f3f4;
+}
+
+.dark-theme .empty-state button:hover {
+  background-color: #3c4043;
+}
+
 /* Фон вкладки рисуется по форме Chrome в window.py: скруглённый верх,
    расходящиеся книзу «лапки», неактивные вкладки прозрачные. */
 .doc-tab {

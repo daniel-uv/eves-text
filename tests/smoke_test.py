@@ -235,6 +235,9 @@ def test_dark_scheme() -> None:
         ".dark-theme menubar",
         ".dark-theme .bottom-bar",
         ".dark-theme .statusbar",
+        ".empty-state",
+        ".dark-theme .empty-state",
+        ".empty-state button",
     ):
         assert selector in css
 
@@ -585,13 +588,37 @@ def test_window() -> None:
     assert window._active_tab is first
     assert window.get_text() == "Он пришёл в течении дня."
 
-    # Закрытие последней вкладки оставляет окно с чистым листом.
+    # Закрытие последней вкладки показывает экран с двумя действиями.
     assert window.close_tab(first)
+    assert window._tabs == []
+    assert window._active_tab is None
+    assert window.stack.get_visible_child() is window.empty_state
+    assert window.tab_strip_row.get_visible() is False
+    assert window.bottom_bar.get_visible() is False
+    assert window.get_title() == "Eve's Text"
+    assert window.pos_label.get_text() == ""
+    assert window.lookup_action("save").get_enabled() is False
+    assert window.lookup_action("undo").get_enabled() is False
+
+    # Кнопка «Открыть существующий» вызывает диалог открытия файла.
+    original_open = window.action_open
+    opened = []
+    window.action_open = lambda *args: opened.append(True)
+    try:
+        window.empty_open_button.clicked()
+    finally:
+        window.action_open = original_open
+    assert opened == [True]
+
+    # Кнопка «Новый документ» возвращает окно к работе; нумерация продолжается.
+    window.empty_new_button.clicked()
     assert len(window._tabs) == 1
-    assert window.get_text() == ""
-    assert window.get_title().startswith("Документ")
-    # Нумерация документов продолжается, а не начинается заново.
+    assert window._active_tab is not None
     assert window._tabs[0].name_label.get_text() == "Документ 3"
+    assert window.stack.get_visible_child() is window._active_tab.scroller
+    assert window.tab_strip_row.get_visible() is True
+    assert window.bottom_bar.get_visible() is True
+    assert window.lookup_action("save").get_enabled() is True
 
     # Переключатель темы в меню «Вид» меняет схему, состояние пункта меню
     # и настройки GTK; файл настроек в тесте не трогаем.
