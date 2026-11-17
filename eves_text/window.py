@@ -230,18 +230,14 @@ class DocumentTab:
     _KAPPA = 0.5522847498
 
     def _tab_colors(self) -> tuple[tuple[float, float, float], ...]:
-        """Цвета вкладок в стиле Chrome: неактивная, активная, наведение, линия."""
+        """Цвета вкладок: поле ввода/активная вкладка, наведение, разделитель."""
         if getattr(self.window, "_dark_theme", False):
             return (
-                # Активная — цвет поля ввода, неактивная чуть темнее,
-                # полоса вкладок ещё темнее (см. style-dark.css).
-                (0x28 / 255, 0x28 / 255, 0x28 / 255),
                 (0x2B / 255, 0x2B / 255, 0x2B / 255),
                 (0x30 / 255, 0x31 / 255, 0x34 / 255),
                 (0x3C / 255, 0x3C / 255, 0x3C / 255),
             )
         return (
-            (0xF5 / 255, 0xF6 / 255, 0xF7 / 255),
             (0xFF / 255, 0xFF / 255, 0xFF / 255),
             (0xE8 / 255, 0xEA / 255, 0xED / 255),
             (0xB4 / 255, 0xB8 / 255, 0xBD / 255),
@@ -292,22 +288,20 @@ class DocumentTab:
 
         active = widget.get_style_context().has_class("active")
         dragging = self.window._drag_tab is self
-        inactive_color, active_color, hover_color, separator_color = self._tab_colors()
-        # Форма рисуется для каждой вкладки: без заливки неактивные выглядят
-        # простыми прямоугольниками цвета полосы, пока не наведёшь мышь.
-        fill_color = (
-            active_color
-            if active
-            else hover_color if (self.hovered or dragging) else inactive_color
-        )
+        input_color, hover_color, separator_color = self._tab_colors()
         self._tab_shape(cr, width, height)
-        cr.set_source_rgb(*fill_color)
-        cr.fill()
-        if dragging:
-            # Форма вкладки остаётся прежней, только добавляется обводка:
-            # полупрозрачность делала её размытой во время перетаскивания.
-            cr.set_line_width(2.0)
-            cr.set_source_rgb(*self._tab_accent())
+        if active:
+            # Активная вкладка — цвет поля ввода и сливается с документом.
+            cr.set_source_rgb(*input_color)
+            cr.fill()
+        else:
+            # Неактивная вкладка прозрачна: видна только обводка цветом поля
+            # ввода, поэтому её форма читается, но не выглядит активной.
+            cr.set_line_width(2.0 if (self.hovered or dragging) else 1.5)
+            if dragging:
+                cr.set_source_rgb(*self._tab_accent())
+            else:
+                cr.set_source_rgb(*(hover_color if self.hovered else input_color))
             cr.stroke()
 
         # Разделитель как в Chrome: короткая скруглённая полоска между
