@@ -459,6 +459,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._font_size = DEFAULT_FONT_SIZE
         self._default_align = "left"
         self._settings_dialog: Gtk.Dialog | None = None
+        self._settings_pending = False
         self._settings_size_spin: FontSizeEntry | None = None
         self._settings_align_combo: Gtk.ComboBoxText | None = None
         self._wrap_enabled = True
@@ -1325,7 +1326,11 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         menubar.append(ai_item)
 
-        menubar.append(self._item("_Настройки", "win.settings"))
+        # Пункт верхнего уровня без подменю в GTK активируется только со
+        # второго клика: обрабатываем первое нажатие сами.
+        settings_item = self._item("_Настройки", "win.settings")
+        settings_item.connect("button-press-event", self._on_settings_pressed)
+        menubar.append(settings_item)
 
         help_item = Gtk.MenuItem.new_with_mnemonic("_Справка")
         help_menu = Gtk.Menu()
@@ -1348,6 +1353,13 @@ class MainWindow(Gtk.ApplicationWindow):
         item = Gtk.CheckMenuItem.new_with_mnemonic(label)
         item.set_action_name(action)
         return item
+
+    @staticmethod
+    def _on_settings_pressed(item: Gtk.MenuItem, event: Gdk.EventButton) -> bool:
+        if event.button != 1:
+            return False
+        item.activate()
+        return True
 
     def _build_statusbar(self) -> Gtk.Box:
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
@@ -1987,10 +1999,23 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_message(f"Не удалось сохранить настройки: {exc}", seconds=12)
 
     def action_settings(self, *_args) -> None:
-        """Диалог настроек: размер шрифта и выравнивание по умолчанию."""
+        """Открыть настройки после завершения обработки пункта меню."""
         if self._settings_dialog is not None:
             self._settings_dialog.present()
             return
+        if self._settings_pending:
+            return
+        self._settings_pending = True
+        # Пока меню удерживает grab, показанный сразу модальный диалог может
+        # не появиться с первого клика — открываем его следующим циклом GTK.
+        GLib.idle_add(self._open_settings_dialog)
+
+    def _open_settings_dialog(self) -> bool:
+        """Диалог настроек: размер шрифта и выравнивание по умолчанию."""
+        self._settings_pending = False
+        if self._settings_dialog is not None:
+            self._settings_dialog.present()
+            return False
 
         dialog = Gtk.Dialog(title="Настройки", transient_for=self, modal=True)
         dialog.set_default_size(400, -1)
@@ -2049,6 +2074,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
         dialog.connect("response", on_response)
         dialog.show_all()
+        dialog.present()
+        return False
 
     # ------------------------------------------------------- AI model setup
 

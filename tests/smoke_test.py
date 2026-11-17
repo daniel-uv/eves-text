@@ -441,8 +441,16 @@ def test_linux_restart() -> None:
 
 
 def test_window() -> Application:
+    from eves_text import settings as user_settings
+
     app = Application()
     app.register(None)
+
+    # Тест не должен зависеть от настроек, сохранённых на этом компьютере.
+    original_load = user_settings.load
+    original_save = user_settings.save
+    user_settings.load = lambda: {}
+    user_settings.save = lambda data: None
 
     window = MainWindow(application=app)
     window.set_text("Он пришёл в течении дня.", Path("/tmp/пример.txt"))
@@ -681,12 +689,20 @@ def test_window() -> Application:
     assert window.tab_bar.get_children()[-1] is window.new_tab_button
 
     window.destroy()
+    user_settings.load = original_load
+    user_settings.save = original_save
     return app
 
 
 def test_settings(app: Application) -> None:
     """Настройки по умолчанию загружаются, меняются в диалоге и сохраняются."""
     from eves_text import settings as user_settings
+
+    def open_settings() -> None:
+        """Действие меню откладывает диалог до следующего цикла GTK."""
+        window.action_settings()
+        while Gtk.events_pending():
+            Gtk.main_iteration()
 
     original_load = user_settings.load
     original_save = user_settings.save
@@ -708,9 +724,28 @@ def test_settings(app: Application) -> None:
             )
             assert font.get_size() == 20 * Pango.SCALE
 
-            # Пункт меню «Настройки» открывает диалог с текущими значениями.
+            # Пункт меню «Настройки» открывает диалог с первого клика.
             assert window.lookup_action("settings") is not None
-            window.action_settings()
+            menubar = next(
+                child
+                for child in window.get_children()[0].get_children()
+                if isinstance(child, Gtk.MenuBar)
+            )
+            settings_item = next(
+                child
+                for child in menubar.get_children()
+                if "Настройки"
+                in (
+                    child.get_child().get_text()
+                    if isinstance(child.get_child(), Gtk.Label)
+                    else ""
+                )
+            )
+            press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+            press.button = 1
+            assert settings_item.emit("button-press-event", press) is True
+            while Gtk.events_pending():
+                Gtk.main_iteration()
             dialog = window._settings_dialog
             assert dialog is not None
             assert dialog.get_title() == "Настройки"
@@ -719,7 +754,7 @@ def test_settings(app: Application) -> None:
             assert window._settings_align_combo is not None
             assert window._settings_align_combo.get_active_id() == "center"
             # Повторный вызов не создаёт второй диалог.
-            window.action_settings()
+            open_settings()
             assert window._settings_dialog is dialog
 
             window._settings_size_spin.set_value(16)
@@ -738,7 +773,7 @@ def test_settings(app: Application) -> None:
 
             # Отмена не меняет значения и ничего не сохраняет.
             before = len(saved)
-            window.action_settings()
+            open_settings()
             window._settings_size_spin.set_value(24)
             window._settings_align_combo.set_active(3)
             window._settings_dialog.response(Gtk.ResponseType.CANCEL)
