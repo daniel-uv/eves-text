@@ -477,6 +477,30 @@ def test_window() -> None:
     # Нумерация документов продолжается, а не начинается заново.
     assert window._tabs[0].name_label.get_text() == "Документ 3"
 
+    # Переключатель темы в меню «Вид» меняет схему, состояние пункта меню
+    # и настройки GTK; файл настроек в тесте не трогаем.
+    from eves_text import settings as user_settings
+
+    original_save = user_settings.save
+    user_settings.save = lambda data: None
+    gtk_settings = Gtk.Settings.get_default()
+    old_dark = gtk_settings.get_property("gtk-application-prefer-dark-theme")
+    old_theme = gtk_settings.get_property("gtk-theme-name")
+    try:
+        action = window.lookup_action("dark-theme")
+        assert action is not None
+        initial = window._dark_theme
+        window.activate_action("dark-theme", None)
+        assert window._dark_theme is (not initial)
+        assert window.get_style_context().has_class("dark-theme") is (not initial)
+        assert action.get_state().get_boolean() is (not initial)
+        window.activate_action("dark-theme", None)
+        assert window._dark_theme is initial
+    finally:
+        gtk_settings.set_property("gtk-application-prefer-dark-theme", old_dark)
+        gtk_settings.set_property("gtk-theme-name", old_theme)
+        user_settings.save = original_save
+
     window.destroy()
 
 

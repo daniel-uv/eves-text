@@ -368,6 +368,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self._spell_check = True
 
         config = user_settings.load()
+        saved_theme = str(config.get("theme") or "").strip().lower()
+        self._theme_preference = (
+            saved_theme if saved_theme in ("light", "dark") else None
+        )
         self._managed_ollama = ManagedOllama()
         self._backend_lock = threading.Lock()
         self._ollama_log_path = user_settings.config_dir() / "ollama-server.log"
@@ -396,7 +400,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._update_version = ""
         self._update_progress_time = 0.0
         self._destroyed = False
-        self._dark_theme = False
+        self._dark_theme = (
+            self._theme_preference == "dark"
+            if self._theme_preference
+            else self._detect_system_dark_theme()
+        )
 
         self.set_default_size(1000, 700)
         self._icon_name = app_icon_name()
@@ -408,6 +416,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._connect_signals()
         self._install_focus_handling()
         self.connect("destroy", self._on_destroy)
+        if self._theme_preference is not None:
+            self._sync_gtk_theme()
         self._apply_style_scheme()
         self._update_title()
         self._update_status()
@@ -809,6 +819,8 @@ class MainWindow(Gtk.ApplicationWindow):
         view_menu.append(
             self._check_item("Проверка орфографии", "win.spell-check")
         )
+        view_menu.append(Gtk.SeparatorMenuItem())
+        view_menu.append(self._check_item("_Тёмная тема", "win.dark-theme"))
         menubar.append(view_item)
 
         ai_item = Gtk.MenuItem.new_with_mnemonic("_ИИ")
@@ -930,6 +942,12 @@ class MainWindow(Gtk.ApplicationWindow):
                 ),
             )
             self.add_action(action)
+
+        theme_action = Gio.SimpleAction.new_stateful(
+            "dark-theme", None, GLib.Variant.new_boolean(self._dark_theme)
+        )
+        theme_action.connect("change-state", self._on_theme_state_changed)
+        self.add_action(theme_action)
 
         if not self.spellcheck.available:
             self.lookup_action("spell-check").set_enabled(False)
@@ -1118,7 +1136,11 @@ class MainWindow(Gtk.ApplicationWindow):
 
         settings = Gtk.Settings.get_default()
         if settings is not None:
-            settings.connect("notify::gtk-theme-name", lambda *_: self._apply_style_scheme())
+            settings.connect("notify::gtk-theme-name", self._on_system_theme_changed)
+            settings.connect(
+                "notify::gtk-application-prefer-dark-theme",
+                self._on_system_theme_changed,
+            )
 
     def _update_undo(self) -> None:
         if self._active_tab is None or self.undo_action is None:
@@ -2199,15 +2221,58 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ---------------------------------------------------------------- theme
 
-    def _apply_style_scheme(self) -> None:
+    @staticmethod
+    def _detect_system_dark_theme() -> bool:
+        """Тема, выбранная в системе, если пользователь её не переопределил."""
         settings = Gtk.Settings.get_default()
-        dark = False
-        if settings is not None:
-            theme = (settings.get_property("gtk-theme-name") or "").lower()
-            dark = bool(settings.get_property("gtk-application-prefer-dark-theme")) or (
-                "dark" in theme
-            )
+        if settings is None:
+            return False
+        theme = (settings.get_property("gtk-theme-name") or "").lower()
+        return bool(settings.get_property("gtk-application-prefer-dark-theme")) or (
+            "dark" in theme
+        )
+
+    def _sync_gtk_theme(self) -> None:
+        """Меняет тему GTK, чтобы шапка окна и системные виджеты следовали за ней."""
+        settings = Gtk.Settings.get_default()
+        if settings is None:
+            return
+        dark = self._dark_theme
+        settings.set_property("gtk-application-prefer-dark-theme", dark)
+        name = (settings.get_property("gtk-theme-name") or "").lower()
+        if dark and "dark" not in name:
+            settings.set_property("gtk-theme-name", "Adwaita-dark")
+        elif not dark and "dark" in name:
+            settings.set_property("gtk-theme-name", "Adwaita")
+
+    def _on_theme_state_changed(self, action, value) -> None:
+        dark = value.get_boolean()
+        action.set_state(value)
+        if dark == self._dark_theme:
+            return
         self._dark_theme = dark
+        self._theme_preference = "dark" if dark else "light"
+        config = user_settings.load()
+        config["theme"] = self._theme_preference
+        try:
+            user_settings.save(config)
+        except OSError as exc:
+            self._show_message(f"Не удалось сохранить тему: {exc}", seconds=12)
+        self._sync_gtk_theme()
+        self._apply_style_scheme()
+
+    def _on_system_theme_changed(self, *_args) -> None:
+        """Следовать системной теме, пока пользователь не выбрал свою."""
+        if self._theme_preference is not None:
+            return
+        dark = self._detect_system_dark_theme()
+        if dark == self._dark_theme:
+            return
+        self._dark_theme = dark
+        self._apply_style_scheme()
+
+    def _apply_style_scheme(self) -> None:
+        dark = self._dark_theme
         context = self.get_style_context()
         if dark:
             context.add_class("dark-theme")

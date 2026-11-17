@@ -147,7 +147,7 @@ Eve's Text\
 5. Установщик (по желанию, нужен [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
    ```bat
-   ISCC.exe /DMyAppVersion=0.6.24 windows\eves-text.iss
+   ISCC.exe /DMyAppVersion=0.6.25 windows\eves-text.iss
    ```
 
    Готовый файл — `windows\dist-installer\EvesText-<версия>-win64-setup.exe`.
