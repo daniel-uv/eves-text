@@ -1,0 +1,80 @@
+/* Глобальные правила тёмной темы.
+
+   Подключаются только когда включена тёмная тема. В GTK выпадающие списки,
+   контекстные меню и меню строки меню — отдельные всплывающие окна. Класс
+   .dark-theme, который мы ставим на главное окно, на них не распространяется,
+   поэтому цвета задаются провайдером для всего экрана. */
+
+menu,
+.menu,
+window.popup,
+combobox,
+combobox button,
+treeview,
+scrolledwindow,
+viewport,
+dialog,
+tooltip {
+  background-color: #2b2b2b;
+  background-image: none;
+  color: #e3e3e3;
+  border-color: #4a4a4a;
+}
+
+menuitem,
+checkmenuitem,
+radiomenuitem,
+menuitem label,
+checkmenuitem label,
+radiomenuitem label {
+  background-color: transparent;
+  background-image: none;
+  color: #e3e3e3;
+}
+
+menuitem:hover,
+menuitem:selected,
+checkmenuitem:hover,
+checkmenuitem:selected,
+radiomenuitem:hover,
+radiomenuitem:selected {
+  background-color: #3a3a3a;
+  background-image: none;
+  color: #ffffff;
+}
+
+separatormenuitem {
+  color: #4a4a4a;
+}
+
+treeview row:selected,
+treeview row:selected label,
+treeview:selected,
+treeview:selected label {
+  background-color: #3a3a3a;
+  color: #ffffff;
+}
+
+/* Поля ввода, в том числе строка поиска в комбобоксе моделей. */
+combobox entry,
+entry {
+  background-color: #2b2b2b;
+  background-image: none;
+  color: #e3e3e3;
+  border-color: #5a5a5a;
+}
+
+combobox entry:focus,
+entry:focus {
+  border-color: #8a8a8a;
+}
+
+placeholder {
+  color: #9a9a9a;
+}
+
+dialog headerbar,
+dialog actionbar {
+  background-color: #1f2020;
+  color: #e3e3e3;
+}

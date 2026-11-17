@@ -2375,6 +2375,12 @@ class MainWindow(Gtk.ApplicationWindow):
             context.add_class("dark-theme")
         else:
             context.remove_class("dark-theme")
+        # Всплывающие меню и выпадающие списки — отдельные окна GTK, на них
+        # класс главного окна не действует. Приложение подключает тёмный CSS
+        # для всего экрана, поэтому списки тоже меняют цвет вместе с темой.
+        application = self.get_application()
+        if application is not None and hasattr(application, "set_dark_style"):
+            application.set_dark_style(dark)
         manager = GtkSource.StyleSchemeManager.get_default()
         # Своя тёмная схема: нейтральный серый фон вместо зеленоватого oblivion.
         styles_dir = str(Path(__file__).parent / "resources" / "styles")

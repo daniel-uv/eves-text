@@ -17,6 +17,24 @@ headerbar.app-titlebar {
   color: #e3e3e3;
 }
 
+/* Выпадающие меню и списки в светлой теме: текст читается независимо
+   от системной GTK-темы. Тёмный вариант подключается отдельным провайдером
+   (style-dark.css), который действует и на всплывающие окна. */
+menuitem,
+checkmenuitem,
+radiomenuitem,
+menuitem label,
+checkmenuitem label,
+radiomenuitem label {
+  color: #202124;
+}
+
+menuitem:selected,
+checkmenuitem:selected,
+radiomenuitem:selected {
+  color: #202124;
+}
+
 /* В Windows GTK-тема может остаться светлой: красим полосы сами,
    чтобы тёмная тема применялась и к меню, и к нижним панелям. */
 

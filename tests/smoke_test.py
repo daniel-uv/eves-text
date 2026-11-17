@@ -231,6 +231,17 @@ def test_dark_scheme() -> None:
     ):
         assert selector in css
 
+    # Выпадающие списки и меню живут в отдельных окнах: для них нужен
+    # глобальный тёмный CSS, а не только класс .dark-theme на главном окне.
+    dark_css = (ROOT / "eves_text" / "resources" / "style-dark.css").read_text(
+        encoding="utf-8"
+    )
+    for selector in ("menu,", "combobox", "treeview", "entry", "menuitem"):
+        assert selector in dark_css
+    assert "set_dark_style" in (ROOT / "eves_text" / "application.py").read_text(
+        encoding="utf-8"
+    )
+
     build = (ROOT / "windows" / "build-portable.sh").read_text(encoding="utf-8")
     assert "Adwaita-dark" in build
 
@@ -526,8 +537,13 @@ def test_window() -> None:
         assert window._dark_theme is (not initial)
         assert window.get_style_context().has_class("dark-theme") is (not initial)
         assert action.get_state().get_boolean() is (not initial)
+        if Gdk.Screen.get_default() is not None:
+            # Глобальный тёмный CSS включается для popup-меню и списков.
+            assert app._dark_style_active is (not initial)
         window.activate_action("dark-theme", None)
         assert window._dark_theme is initial
+        if Gdk.Screen.get_default() is not None:
+            assert app._dark_style_active is initial
     finally:
         gtk_settings.set_property("gtk-application-prefer-dark-theme", old_dark)
         gtk_settings.set_property("gtk-theme-name", old_theme)

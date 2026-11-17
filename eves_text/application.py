@@ -27,6 +27,9 @@ class Application(Gtk.Application):
         )
         GLib.set_application_name(APP_NAME)
         GLib.set_prgname("eves-text")
+        self._screen: Gdk.Screen | None = None
+        self._dark_provider: Gtk.CssProvider | None = None
+        self._dark_style_active = False
         self.add_main_option(
             "version",
             0,
@@ -91,18 +94,48 @@ class Application(Gtk.Application):
         if settings is not None:
             settings.set_property("gtk-application-prefer-dark-theme", not bool(light))
 
-    @staticmethod
-    def _load_css() -> None:
+    def _load_css(self) -> None:
         css = Path(__file__).parent / "resources" / "style.css"
         if not css.exists():
             return
         provider = Gtk.CssProvider()
         provider.load_from_path(str(css))
         screen = Gdk.Screen.get_default()
+        self._screen = screen
         if screen is not None:
             Gtk.StyleContext.add_provider_for_screen(
                 screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
+
+    def set_dark_style(self, active: bool) -> None:
+        """Включает тёмные цвета для всех окон, включая меню и списки.
+
+        Выпадающие списки в GTK живут в собственных окнах, поэтому класс
+        .dark-theme главного окна до них не доходит. Отдельный провайдер для
+        экрана красит и их, а при возврате к светлой теме просто снимается.
+        """
+        if self._dark_style_active == active:
+            return
+        screen = self._screen or Gdk.Screen.get_default()
+        self._screen = screen
+        if screen is None:
+            return
+        if self._dark_provider is None:
+            path = Path(__file__).parent / "resources" / "style-dark.css"
+            if not path.exists():
+                return
+            provider = Gtk.CssProvider()
+            provider.load_from_path(str(path))
+            self._dark_provider = provider
+        if active:
+            Gtk.StyleContext.add_provider_for_screen(
+                screen,
+                self._dark_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+            )
+        else:
+            Gtk.StyleContext.remove_provider_for_screen(screen, self._dark_provider)
+        self._dark_style_active = active
 
     def do_activate(self) -> None:
         window = self.props.active_window
