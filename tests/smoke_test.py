@@ -431,6 +431,12 @@ def test_window() -> None:
     assert second is not first
     assert window.get_text() == ""
     assert second.name_label.get_text() == "Документ 2"
+    # Текст внутри вкладки не прилипает к краям, справа от крестика есть зазор.
+    assert second.label_box.get_margin_start() >= 12
+    assert second.label_box.get_margin_end() >= 10
+    assert second.label_box.get_spacing() >= 8
+    assert second.tab.get_style_context().has_class("active")
+    assert not first.tab.get_style_context().has_class("active")
     # «+» — последний элемент полосы, сразу за вкладками.
     assert window.tab_bar.get_children()[-1] is window.new_tab_button
     window.set_text("Второй документ", Path("/tmp/второй.txt"))

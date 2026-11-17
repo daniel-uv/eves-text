@@ -1,9 +1,9 @@
 ; Установщик Eve's Text для Windows 11 (Inno Setup 6).
 ; Собирается после windows/build-portable.sh:
-;   ISCC.exe /DMyAppVersion=0.6.19 windows\eves-text.iss
+;   ISCC.exe /DMyAppVersion=0.6.20 windows\eves-text.iss
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.6.19"
+  #define MyAppVersion "0.6.20"
 #endif
 
 #define MyAppName "Eve's Text"

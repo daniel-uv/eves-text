@@ -61,7 +61,6 @@
 /* Полоса вкладок: «+» стоит сразу за последней вкладкой. */
 .tab-strip-row {
   background-color: alpha(@theme_fg_color, 0.04);
-  border-bottom: 1px solid @borders;
 }
 
 .tab-strip-scroller {
@@ -69,14 +68,13 @@
 }
 
 .tab-strip {
-  padding: 2px 4px;
+  padding: 2px 4px 0;
 }
 
 /* Вкладка — скруглённая плашка, активная выделена светлее. */
 .doc-tab {
   min-height: 24px;
-  margin: 3px 2px;
-  padding: 1px 9px;
+  margin: 3px 2px 2px;
   border: 1px solid alpha(@borders, 0.9);
   border-radius: 8px;
   background-color: alpha(@theme_fg_color, 0.05);
@@ -86,9 +84,19 @@
   background-color: alpha(@theme_fg_color, 0.10);
 }
 
+/* Активная вкладка сливается с документом: нижней грани нет,
+   снизу углы прямые, фон совпадает с фоном страницы. */
 .doc-tab.active {
+  margin-bottom: 0;
   background-color: @theme_base_color;
   border-color: alpha(@theme_fg_color, 0.35);
+  border-bottom-style: none;
+  border-radius: 8px 8px 0 0;
+}
+
+/* В тёмной теме фон редактора — #2b2b2b (схема eves-dark). */
+.dark-theme .doc-tab.active {
+  background-color: #2b2b2b;
 }
 
 /* Кнопка «+» вплотную к последней вкладке. */
@@ -103,7 +111,7 @@
 .tab-close {
   min-width: 18px;
   min-height: 18px;
-  margin: 0;
+  margin: 0 2px 0 0;
   padding: 0;
   border: none;
   background: none;

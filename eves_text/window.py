@@ -179,7 +179,13 @@ class DocumentTab:
         close.connect("clicked", lambda *_: window.close_tab(self))
         self.close_button = close
 
-        self.label_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        # Отступы внутри вкладки задаём полям содержимого: Gtk.EventBox
+        # не применяет CSS-padding к дочернему виджету.
+        self.label_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.label_box.set_margin_start(12)
+        self.label_box.set_margin_end(10)
+        self.label_box.set_margin_top(1)
+        self.label_box.set_margin_bottom(1)
         self.label_box.pack_start(self.name_label, False, False, 0)
         self.label_box.pack_start(close, False, False, 0)
 
@@ -388,7 +394,7 @@ class MainWindow(Gtk.ApplicationWindow):
         tab = DocumentTab(self, self._doc_counter)
         tab.spellcheck.set_enabled(self._spell_check)
         self._tabs.append(tab)
-        self.tab_bar.pack_start(tab.tab, False, False, 0)
+        self.tab_bar.pack_start(tab.tab, False, True, 0)
         self.stack.add(tab.scroller)
         self._connect_tab(tab)
         self._update_tab_label(tab)
@@ -2058,6 +2064,11 @@ class MainWindow(Gtk.ApplicationWindow):
                 "dark" in theme
             )
         self._dark_theme = dark
+        context = self.get_style_context()
+        if dark:
+            context.add_class("dark-theme")
+        else:
+            context.remove_class("dark-theme")
         manager = GtkSource.StyleSchemeManager.get_default()
         # Своя тёмная схема: нейтральный серый фон вместо зеленоватого oblivion.
         styles_dir = str(Path(__file__).parent / "resources" / "styles")
