@@ -476,6 +476,78 @@ def test_window() -> None:
     # «+» — последний элемент полосы, сразу за вкладками.
     assert window.tab_bar.get_children()[-1] is window.new_tab_button
 
+    # Вкладки можно перетаскивать мышью: порядок списка совпадает с порядком
+    # виджетов на полосе, а «+» остаётся последним.
+    assert window._move_tab(first, 1)
+    assert window._tabs == [second, first]
+    assert window.tab_bar.get_children() == [
+        second.tab,
+        first.tab,
+        window.new_tab_button,
+    ]
+    # Перестановка неактивной вкладки не меняет активную.
+    assert window._active_tab is second
+
+    # Геометрия плашек в невидимом окне: две вкладки по 130 px.
+    for index, candidate in enumerate(window._tabs):
+        allocation = candidate.tab.get_allocation()
+        allocation.x = index * 130
+        allocation.width = 130
+        candidate.tab.set_allocation(allocation)
+    assert window._drop_position_at(20) == 0
+    assert window._drop_position_at(150) == 1
+    assert window._drop_position_at(400) == 2
+
+    # Нажатие только запоминает вкладку: порядок меняется после сдвига.
+    press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+    press.button = 1
+    press.x = press.y = 5.0
+    press.x_root, press.y_root = 10.0, 20.0
+    assert first.tab.emit("button-press-event", press) is True
+    assert window._drag_candidate is first
+    assert window._drag_tab is None
+    assert window._tabs == [second, first]
+
+    # Сдвиг меньше порога не считается перетаскиванием.
+    motion = Gdk.Event.new(Gdk.EventType.MOTION_NOTIFY)
+    motion.state = Gdk.ModifierType.BUTTON1_MASK
+    motion.x_root, motion.y_root = 13.0, 20.0
+    assert first.tab.emit("motion-notify-event", motion) is False
+    assert window._drag_tab is None
+
+    # После сдвига больше порога вкладка «живо» встаёт на новое место.
+    # Полоса в тесте не показана, поэтому подменяем её GDK-окно.
+    class FakeGdkWindow:
+        def get_root_coords(self, _x, _y):
+            return 0, 0
+
+    original_get_window = window.tab_bar.get_window
+    window.tab_bar.get_window = FakeGdkWindow
+    motion.x_root, motion.y_root = 20.0, 20.0
+    try:
+        assert first.tab.emit("motion-notify-event", motion) is True
+    finally:
+        window.tab_bar.get_window = original_get_window
+    assert window._drag_tab is first
+    assert first.tab.get_style_context().has_class("dragging")
+    assert window._tabs == [first, second]
+    assert window.tab_bar.get_children() == [
+        first.tab,
+        second.tab,
+        window.new_tab_button,
+    ]
+
+    # Отпускание мыши завершает перетаскивание и снимает прозрачность.
+    release = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
+    release.button = 1
+    assert second.tab.emit("button-release-event", release) is False
+    assert first.tab.emit("button-release-event", release) is True
+    assert window._drag_candidate is None
+    assert window._drag_tab is None
+    assert not first.tab.get_style_context().has_class("dragging")
+    # Нажатие сделало вкладку активной — вернём вторую для следующих проверок.
+    window._select_tab(second)
+
     # У размера шрифта нет встроенных стрелок, которые проявлялись при нажатии
     # и дублировали кнопки «−» и «+». Работают только видимые кнопки и ввод.
     from eves_text.window import DEFAULT_FONT_SIZE, FontSizeEntry

@@ -47,6 +47,9 @@ ALIGNMENTS: tuple[tuple[str, str, Gtk.Justification, str], ...] = (
 
 DEFAULT_FONT_SIZE = 12
 
+# Порог в пикселях, после которого нажатие считается перетаскиванием.
+TAB_DRAG_THRESHOLD = 6
+
 # Готовые варианты для меню «ИИ» → «Скачать модель».
 MODEL_CHOICES: tuple[tuple[str, str], ...] = (
     ("qwen2.5:7b-instruct", "qwen2.5 7B — лучшее качество (~4,7 ГБ)"),
@@ -198,9 +201,17 @@ class DocumentTab:
         self.tab.get_style_context().add_class("doc-tab")
         self.tab.add(self.label_box)
         self.tab.connect("button-press-event", self._on_clicked)
+        self.tab.connect("button-release-event", self._on_tab_release)
+        self.tab.connect("motion-notify-event", self._on_tab_motion)
         self.tab.connect("enter-notify-event", self._on_tab_enter)
         self.tab.connect("leave-notify-event", self._on_tab_leave)
         self.tab.connect("draw", self._draw_tab)
+        self.tab.set_events(
+            self.tab.get_events()
+            | Gdk.EventMask.BUTTON1_MOTION_MASK
+            | Gdk.EventMask.BUTTON_RELEASE_MASK
+            | Gdk.EventMask.POINTER_MOTION_MASK
+        )
         close.connect("enter-notify-event", self._on_close_enter)
         close.connect("leave-notify-event", self._on_close_leave)
         self.tab.set_tooltip_text("Новый документ")
@@ -341,8 +352,19 @@ class DocumentTab:
     def _on_clicked(self, _widget, event) -> bool:
         if event.button == 1:
             self.window._select_tab(self)
+            self.window._start_tab_drag(self, event.x_root, event.y_root)
             return True
         return False
+
+    # --------------------------------------------------------- перетаскивание
+
+    def _on_tab_motion(self, widget, event) -> bool:
+        return self.window._update_tab_drag(self, widget, event)
+
+    def _on_tab_release(self, widget, event) -> bool:
+        if event.button != 1:
+            return False
+        return self.window._finish_tab_drag(self, widget)
 
     def is_pristine(self) -> bool:
         """Пустой лист без пути и изменений — его можно занять файлом."""
@@ -471,6 +493,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self._update_progress_time = 0.0
         self._destroyed = False
         self._header_bar: Gtk.HeaderBar | None = None
+        self._drag_candidate: DocumentTab | None = None
+        self._drag_tab: DocumentTab | None = None
+        self._drag_start_x = 0.0
+        self._drag_start_y = 0.0
         self._dark_theme = (
             self._theme_preference == "dark"
             if self._theme_preference
@@ -615,12 +641,102 @@ class MainWindow(Gtk.ApplicationWindow):
         tab.spellcheck.set_enabled(self._spell_check)
         self._tabs.append(tab)
         self.tab_bar.pack_start(tab.tab, False, True, 0)
+        # Все дети полосы упакованы через pack_start: так reorder_child
+        # считает позиции обычным порядком, а «+» остаётся последним.
+        self.tab_bar.reorder_child(tab.tab, len(self._tabs) - 1)
         self.stack.add(tab.scroller)
         self._connect_tab(tab)
         self._update_tab_label(tab)
         self._apply_style_scheme()
         self._select_tab(tab)
         return tab
+
+    # ------------------------------------------- порядок и перетаскивание вкладок
+
+    def _start_tab_drag(self, tab: DocumentTab, x_root: float, y_root: float) -> None:
+        """Запомнить нажатие: перетаскивание начнётся после сдвига мыши."""
+        self._drag_candidate = tab
+        self._drag_start_x = float(x_root)
+        self._drag_start_y = float(y_root)
+        self._drag_tab = None
+
+    def _update_tab_drag(self, tab: DocumentTab, widget: Gtk.Widget, event) -> bool:
+        if self._drag_candidate is not tab:
+            return False
+        if not event.state & Gdk.ModifierType.BUTTON1_MASK:
+            self._finish_tab_drag(tab, widget)
+            return False
+
+        x_root, y_root = float(event.x_root), float(event.y_root)
+        if self._drag_tab is None:
+            moved = max(
+                abs(x_root - self._drag_start_x),
+                abs(y_root - self._drag_start_y),
+            )
+            if moved < TAB_DRAG_THRESHOLD:
+                return False
+            self._drag_tab = tab
+            # Grab удерживает события на плашке, даже когда курсор вышел за неё.
+            if widget.get_realized() and not widget.has_grab():
+                widget.grab_add()
+            tab.tab.get_style_context().add_class("dragging")
+
+        gdk_window = self.tab_bar.get_window()
+        if gdk_window is None:
+            return True
+        root_x, _root_y = gdk_window.get_root_coords(0, 0)
+        position = self._drop_position_at(x_root - root_x)
+        old_index = self._tabs.index(tab)
+        new_index = position if position <= old_index else position - 1
+        self._move_tab(tab, new_index)
+        return True
+
+    def _finish_tab_drag(self, tab: DocumentTab, widget: Gtk.Widget) -> bool:
+        if self._drag_candidate is not tab:
+            return False
+        if self._drag_tab is not None:
+            if widget.get_realized() and widget.has_grab():
+                widget.grab_remove()
+            tab.tab.get_style_context().remove_class("dragging")
+        self._drag_candidate = None
+        self._drag_tab = None
+        return True
+
+    def _cancel_tab_drag(self, tab: DocumentTab | None = None) -> None:
+        """Сбросить состояние перетаскивания при закрытии вкладки или окна."""
+        dragged = self._drag_tab or self._drag_candidate
+        if dragged is not None and (tab is None or dragged is tab):
+            if dragged.tab.get_realized() and dragged.tab.has_grab():
+                dragged.tab.grab_remove()
+            dragged.tab.get_style_context().remove_class("dragging")
+        if tab is None or self._drag_candidate is tab:
+            self._drag_candidate = None
+        if tab is None or self._drag_tab is tab:
+            self._drag_tab = None
+
+    def _drop_position_at(self, x: float) -> int:
+        """Позиция вставки: 0..len(tabs), где len — после последней вкладки."""
+        for index, tab in enumerate(self._tabs):
+            allocation = tab.tab.get_allocation()
+            if x < allocation.x + allocation.width / 2:
+                return index
+        return len(self._tabs)
+
+    def _move_tab(self, tab: DocumentTab, new_index: int) -> bool:
+        """Переставить вкладку в списке и в полосе, сохранив активную."""
+        if tab not in self._tabs:
+            return False
+        old_index = self._tabs.index(tab)
+        new_index = max(0, min(new_index, len(self._tabs) - 1))
+        if new_index == old_index:
+            return False
+        self._tabs.remove(tab)
+        self._tabs.insert(new_index, tab)
+        self.tab_bar.reorder_child(tab.tab, new_index)
+        # Разделители зависят от соседей, поэтому перерисовываем все вкладки.
+        for candidate in self._tabs:
+            candidate.refresh_visuals()
+        return True
 
     def _tab_for_buffer(self, buffer: Gtk.TextBuffer) -> DocumentTab | None:
         for tab in self._tabs:
@@ -705,6 +821,7 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
 
         index = self._tabs.index(tab)
+        self._cancel_tab_drag(tab)
         if tab.caret is not None:
             tab.caret.stop()
         self._tabs.remove(tab)
@@ -782,7 +899,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.new_tab_button.set_tooltip_text("Новая вкладка (Ctrl+N)")
         self.new_tab_button.get_style_context().add_class("new-tab")
         self.new_tab_button.connect("clicked", lambda *_: self.action_new())
-        self.tab_bar.pack_end(self.new_tab_button, False, False, 0)
+        self.tab_bar.pack_start(self.new_tab_button, False, False, 0)
 
         strip.add(self.tab_bar)
         strip_row.pack_start(strip, False, False, 0)
@@ -2775,6 +2892,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_destroy(self, *_args) -> None:
         """Останавливает скачивание и отдельную службу при закрытии окна."""
         self._destroyed = True
+        self._cancel_tab_drag()
         for tab in self._tabs:
             if tab.caret is not None:
                 tab.caret.stop()
