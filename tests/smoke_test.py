@@ -451,6 +451,18 @@ def test_window() -> None:
     assert first.close_button.get_opacity() == 0.0
     # «+» — последний элемент полосы, сразу за вкладками.
     assert window.tab_bar.get_children()[-1] is window.new_tab_button
+
+    # У размера шрифта нет встроенных стрелок, которые проявлялись при нажатии
+    # и дублировали кнопки «−» и «+». Работают только видимые кнопки и ввод.
+    from eves_text.window import DEFAULT_FONT_SIZE, FontSizeEntry
+
+    assert isinstance(window.font_size_spin, FontSizeEntry)
+    assert not isinstance(window.font_size_spin, Gtk.SpinButton)
+    assert window.font_size_spin.get_value() == DEFAULT_FONT_SIZE
+    window.font_larger.clicked()
+    assert window.font_size_spin.get_value() == DEFAULT_FONT_SIZE + 1
+    window.font_smaller.clicked()
+    assert window.font_size_spin.get_value() == DEFAULT_FONT_SIZE
     window.set_text("Второй документ", Path("/tmp/второй.txt"))
     assert "второй.txt" in window.get_title()
     assert "2 сл." in window.counts_label.get_text()

@@ -19,6 +19,7 @@ from gi.repository import (  # noqa: E402
     GdkPixbuf,
     Gio,
     GLib,
+    GObject,
     Gtk,
     GtkSource,
     Pango,
@@ -349,6 +350,75 @@ class DocumentTab:
             return False
         start, end = self.buffer.get_bounds()
         return not self.buffer.get_text(start, end, True)
+
+
+class FontSizeEntry(Gtk.Entry):
+    """Поле размера шрифта без встроенных стрелок Gtk.SpinButton.
+
+    Стрелки спинора остаются в HIS-дереве невидимыми кнопками и проявляются
+    при нажатии, дублируя кнопки «−» и «+». Обычное поле их не содержит.
+    """
+
+    __gsignals__ = {
+        "value-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
+    }
+
+    MIN_SIZE = 8
+    MAX_SIZE = 48
+
+    def __init__(self, value: int) -> None:
+        super().__init__()
+        self._value = value
+        self._guard = False
+        self.set_width_chars(3)
+        self.set_alignment(0.5)
+        self.set_text(str(value))
+        self.get_style_context().add_class("font-size-entry")
+        self.connect("changed", self._on_text_changed)
+        self.connect("focus-out-event", self._on_focus_out)
+        self.connect("key-press-event", self._on_key_press)
+
+    def get_value(self) -> int:
+        return self._value
+
+    def set_value(self, value: int | float) -> None:
+        number = max(self.MIN_SIZE, min(self.MAX_SIZE, int(value)))
+        text = str(number)
+        if number == self._value and self.get_text() == text:
+            return
+        self._value = number
+        self._guard = True
+        self.set_text(text)
+        self._guard = False
+        self.emit("value-changed")
+
+    def _on_text_changed(self, *_args) -> None:
+        if self._guard:
+            return
+        try:
+            number = int(self.get_text().strip())
+        except ValueError:
+            return
+        if not self.MIN_SIZE <= number <= self.MAX_SIZE:
+            return
+        self._value = number
+        self.emit("value-changed")
+
+    def _on_focus_out(self, *_args) -> bool:
+        self.set_value(self._value)
+        return False
+
+    def _on_key_press(self, _widget, event) -> bool:
+        if event.keyval == Gdk.KEY_Up:
+            self.set_value(self._value + 1)
+            return True
+        if event.keyval == Gdk.KEY_Down:
+            self.set_value(self._value - 1)
+            return True
+        if event.keyval == Gdk.KEY_Return:
+            self.set_value(self._value)
+            return True
+        return False
 
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -749,10 +819,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         content.pack_start(font_buttons, False, False, 0)
 
-        self.font_size_spin = Gtk.SpinButton.new_with_range(8, 48, 1)
-        self.font_size_spin.set_value(DEFAULT_FONT_SIZE)
-        self.font_size_spin.set_numeric(True)
-        self.font_size_spin.set_width_chars(3)
+        self.font_size_spin = FontSizeEntry(DEFAULT_FONT_SIZE)
         self.font_size_spin.set_tooltip_text("Размер шрифта")
         self.font_size_spin.connect("value-changed", self._on_font_size_changed)
         content.pack_start(self.font_size_spin, False, False, 0)
@@ -1009,7 +1076,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.font_size_spin.set_value(self.font_size_spin.get_value() + delta)
         self.view.grab_focus()
 
-    def _on_font_size_changed(self, spin: Gtk.SpinButton) -> None:
+    def _on_font_size_changed(self, spin: FontSizeEntry) -> None:
         self._font_size = int(spin.get_value())
         font = Pango.FontDescription.from_string(
             f"{default_font_family()} {self._font_size}"
