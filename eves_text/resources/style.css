@@ -58,12 +58,46 @@
   color: transparent;
 }
 
-/* Вкладки под меню: компактная кнопка «+» и крестик закрытия. */
+/* Полоса вкладок: «+» стоит сразу за последней вкладкой. */
+.tab-strip-row {
+  background-color: alpha(@theme_fg_color, 0.04);
+  border-bottom: 1px solid @borders;
+}
+
+.tab-strip-scroller {
+  background: transparent;
+}
+
+.tab-strip {
+  padding: 2px 4px;
+}
+
+/* Вкладка — скруглённая плашка, активная выделена светлее. */
+.doc-tab {
+  min-height: 24px;
+  margin: 3px 2px;
+  padding: 1px 9px;
+  border: 1px solid alpha(@borders, 0.9);
+  border-radius: 8px;
+  background-color: alpha(@theme_fg_color, 0.05);
+}
+
+.doc-tab:hover {
+  background-color: alpha(@theme_fg_color, 0.10);
+}
+
+.doc-tab.active {
+  background-color: @theme_base_color;
+  border-color: alpha(@theme_fg_color, 0.35);
+}
+
+/* Кнопка «+» вплотную к последней вкладке. */
 .new-tab {
   min-width: 24px;
   min-height: 22px;
-  margin: 2px 4px;
+  margin: 3px 2px;
   padding: 0 6px;
+  border-radius: 8px;
 }
 
 .tab-close {

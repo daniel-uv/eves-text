@@ -430,6 +430,9 @@ def test_window() -> None:
     second = window._active_tab
     assert second is not first
     assert window.get_text() == ""
+    assert second.name_label.get_text() == "Документ 2"
+    # «+» — последний элемент полосы, сразу за вкладками.
+    assert window.tab_bar.get_children()[-1] is window.new_tab_button
     window.set_text("Второй документ", Path("/tmp/второй.txt"))
     assert "второй.txt" in window.get_title()
     assert "2 сл." in window.counts_label.get_text()
@@ -453,7 +456,9 @@ def test_window() -> None:
     assert window.close_tab(first)
     assert len(window._tabs) == 1
     assert window.get_text() == ""
-    assert window.get_title().startswith("Без имени")
+    assert window.get_title().startswith("Документ")
+    # Нумерация документов продолжается, а не начинается заново.
+    assert window._tabs[0].name_label.get_text() == "Документ 3"
 
     window.destroy()
 

@@ -131,8 +131,9 @@ def app_logo() -> GdkPixbuf.Pixbuf | None:
 class DocumentTab:
     """Одна вкладка: свой буфер, вид, путь, кодировка и орфография."""
 
-    def __init__(self, window: "MainWindow") -> None:
+    def __init__(self, window: "MainWindow", number: int) -> None:
         self.window = window
+        self.default_name = f"Документ {number}"
         self.path: Path | None = None
         self.encoding = "UTF-8"
         self.counts_cache = (-1, -1, -1)
@@ -165,7 +166,7 @@ class DocumentTab:
         self.scroller.add(self.view)
 
         # Заголовок вкладки с кнопкой закрытия.
-        self.name_label = Gtk.Label(label="Без имени")
+        self.name_label = Gtk.Label(label=self.default_name)
         self.name_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.name_label.set_max_width_chars(28)
         close = Gtk.Button.new_from_icon_name(
@@ -181,8 +182,23 @@ class DocumentTab:
         self.label_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.label_box.pack_start(self.name_label, False, False, 0)
         self.label_box.pack_start(close, False, False, 0)
-        self.label_box.show_all()
+
+        # Кликабельная плашка вкладки. Gtk.EventBox, а не Gtk.Button:
+        # внутри уже есть кнопка закрытия, и она должна получать свой клик.
+        self.tab = Gtk.EventBox()
+        self.tab.get_style_context().add_class("doc-tab")
+        self.tab.add(self.label_box)
+        self.tab.connect("button-press-event", self._on_clicked)
+        self.tab.set_tooltip_text("Новый документ")
+        self.tab.show_all()
+
         self.scroller.show_all()
+
+    def _on_clicked(self, _widget, event) -> bool:
+        if event.button == 1:
+            self.window._select_tab(self)
+            return True
+        return False
 
     def is_pristine(self) -> bool:
         """Пустой лист без пути и изменений — его можно занять файлом."""
@@ -198,6 +214,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self._tabs: list[DocumentTab] = []
         self._active_tab: DocumentTab | None = None
+        self._doc_counter = 0
         self._counts_timeout = 0
         self.undo_action = None
         self.redo_action = None
@@ -367,20 +384,17 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _create_tab(self) -> DocumentTab:
         """Создаёт новую пустую вкладку и делает её активной."""
-        tab = DocumentTab(self)
+        self._doc_counter += 1
+        tab = DocumentTab(self, self._doc_counter)
         tab.spellcheck.set_enabled(self._spell_check)
         self._tabs.append(tab)
-        page = self.notebook.append_page(tab.scroller, tab.label_box)
-        self.notebook.set_tab_reorderable(tab.scroller, True)
+        self.tab_bar.pack_start(tab.tab, False, False, 0)
+        self.stack.add(tab.scroller)
         self._connect_tab(tab)
         self._update_tab_label(tab)
         self._apply_style_scheme()
-        self.notebook.set_current_page(page)
-        self._activate_tab(tab)
+        self._select_tab(tab)
         return tab
-
-    def _tab_page(self, tab: DocumentTab) -> int:
-        return self.notebook.page_num(tab.scroller)
 
     def _tab_for_buffer(self, buffer: Gtk.TextBuffer) -> DocumentTab | None:
         for tab in self._tabs:
@@ -424,9 +438,16 @@ class MainWindow(Gtk.ApplicationWindow):
             self._update_undo()
 
     def _activate_tab(self, tab: DocumentTab | None) -> None:
-        if tab is None:
+        if tab is None or tab not in self._tabs:
             return
         self._active_tab = tab
+        self.stack.set_visible_child(tab.scroller)
+        for candidate in self._tabs:
+            context = candidate.tab.get_style_context()
+            if candidate is tab:
+                context.add_class("active")
+            else:
+                context.remove_class("active")
         self._update_title()
         self.enc_label.set_text(tab.encoding)
         self._update_status()
@@ -437,60 +458,40 @@ class MainWindow(Gtk.ApplicationWindow):
         tab.view.grab_focus()
 
     def _select_tab(self, tab: DocumentTab) -> None:
-        page = self._tab_page(tab)
-        if page < 0:
-            return
-        if self.notebook.get_current_page() != page:
-            self.notebook.set_current_page(page)
         self._activate_tab(tab)
 
-    def _on_switch_page(self, _notebook, page, page_num: int) -> None:
-        tab = None
-        for candidate in self._tabs:
-            if candidate.scroller is page:
-                tab = candidate
-                break
-        if tab is not None:
-            self._activate_tab(tab)
-
     def _update_tab_label(self, tab: DocumentTab) -> None:
-        name = tab.path.name if tab.path is not None else "Без имени"
+        name = tab.path.name if tab.path is not None else tab.default_name
         if tab.buffer.get_modified():
             name = f"• {name}"
         tab.name_label.set_text(name)
-        tab.label_box.set_tooltip_text(
-            str(tab.path) if tab.path is not None else "Новый документ"
+        tab.tab.set_tooltip_text(
+            str(tab.path) if tab.path is not None else tab.default_name
         )
 
     def close_tab(self, tab: DocumentTab | None = None) -> bool:
         """Закрывает вкладку, спрашивая о несохранённых изменениях."""
         tab = tab or self._active_tab
-        if tab is None:
+        if tab is None or tab not in self._tabs:
             return False
         if not self._confirm_discard(tab):
             return False
 
-        page = self._tab_page(tab)
+        index = self._tabs.index(tab)
         if tab.caret is not None:
             tab.caret.stop()
-        if tab in self._tabs:
-            self._tabs.remove(tab)
-        if page >= 0:
-            self.notebook.remove_page(page)
+        self._tabs.remove(tab)
+        self.tab_bar.remove(tab.tab)
+        self.stack.remove(tab.scroller)
 
         if not self._tabs:
             # Окно не должно остаться без документа.
             self._create_tab()
             return True
 
-        current = self.notebook.get_nth_page(self.notebook.get_current_page())
-        for candidate in self._tabs:
-            if candidate.scroller is current:
-                self._activate_tab(candidate)
-                break
-        else:
-            self._activate_tab(self._tabs[0])
-            self._select_tab(self._tabs[0])
+        if self._active_tab is tab:
+            self._active_tab = None
+            self._select_tab(self._tabs[min(index, len(self._tabs) - 1)])
         return True
 
     def _pristine_tab(self) -> DocumentTab | None:
@@ -506,22 +507,37 @@ class MainWindow(Gtk.ApplicationWindow):
 
         box.pack_start(self._build_menubar(), False, False, 0)
 
-        # Вкладки идут сразу под меню; «+» стоит в конце полосы вкладок.
-        self.notebook = Gtk.Notebook()
-        self.notebook.set_scrollable(True)
-        self.notebook.set_show_border(False)
-        self.notebook.connect("switch-page", self._on_switch_page)
+        # Полоса вкладок сразу под меню. «+» стоит вплотную за последней
+        # вкладкой, поэтому сама полоса занимает ровно свою ширину,
+        # а фон тянется на всю ширину окна.
+        strip_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        strip_row.get_style_context().add_class("tab-strip-row")
+
+        strip = Gtk.ScrolledWindow()
+        strip.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        strip.set_propagate_natural_height(True)
+        strip.set_propagate_natural_width(True)
+        strip.get_style_context().add_class("tab-strip-scroller")
+
+        self.tab_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.tab_bar.get_style_context().add_class("tab-strip")
 
         self.new_tab_button = Gtk.Button(label="+")
         self.new_tab_button.set_relief(Gtk.ReliefStyle.NONE)
         self.new_tab_button.set_tooltip_text("Новая вкладка (Ctrl+N)")
         self.new_tab_button.get_style_context().add_class("new-tab")
         self.new_tab_button.connect("clicked", lambda *_: self.action_new())
-        self.notebook.set_action_widget(
-            self.new_tab_button, Gtk.PositionType.RIGHT
-        )
-        self.new_tab_button.show()
-        box.pack_start(self.notebook, True, True, 0)
+        self.tab_bar.pack_end(self.new_tab_button, False, False, 0)
+
+        strip.add(self.tab_bar)
+        strip_row.pack_start(strip, False, False, 0)
+        box.pack_start(strip_row, False, False, 0)
+
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        self.stack.set_hexpand(True)
+        self.stack.set_vexpand(True)
+        box.pack_start(self.stack, True, True, 0)
 
         box.pack_start(self._build_bottom_bar(), False, False, 0)
         box.pack_start(self._build_statusbar(), False, False, 0)
@@ -2171,12 +2187,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self.close_tab()
 
     def action_next_tab(self, *_args) -> None:
-        if len(self._tabs) > 1:
-            self.notebook.next_page()
+        if len(self._tabs) > 1 and self._active_tab is not None:
+            index = self._tabs.index(self._active_tab)
+            self._select_tab(self._tabs[(index + 1) % len(self._tabs)])
 
     def action_prev_tab(self, *_args) -> None:
-        if len(self._tabs) > 1:
-            self.notebook.prev_page()
+        if len(self._tabs) > 1 and self._active_tab is not None:
+            index = self._tabs.index(self._active_tab)
+            self._select_tab(self._tabs[(index - 1) % len(self._tabs)])
 
     def action_save(self, *_args) -> bool:
         return self._save_tab(self._active_tab)
@@ -2203,7 +2221,7 @@ class MainWindow(Gtk.ApplicationWindow):
             dialog.set_current_name(tab.path.name)
             dialog.set_current_folder(str(tab.path.parent))
         else:
-            dialog.set_current_name("Без имени.txt")
+            dialog.set_current_name(f"{tab.default_name}.txt")
 
         response = dialog.run()
         path = dialog.get_filename()
@@ -2281,8 +2299,9 @@ class MainWindow(Gtk.ApplicationWindow):
         if self._active_tab is None:
             self.set_title(APP_NAME)
             return
-        name = self.path.name if self.path is not None else "Без имени"
-        mark = "• " if self.buffer.get_modified() else ""
+        tab = self._active_tab
+        name = tab.path.name if tab.path is not None else tab.default_name
+        mark = "• " if tab.buffer.get_modified() else ""
         self.set_title(f"{mark}{name} — {APP_NAME}")
 
     def _update_status(self) -> None:
@@ -2330,7 +2349,7 @@ class MainWindow(Gtk.ApplicationWindow):
         if target is None or not target.buffer.get_modified():
             return True
 
-        name = target.path.name if target.path is not None else "Без имени"
+        name = target.path.name if target.path is not None else target.default_name
         dialog = Gtk.MessageDialog(
             transient_for=self,
             modal=True,
