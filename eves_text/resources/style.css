@@ -57,3 +57,26 @@
   box-shadow: none;
   color: transparent;
 }
+
+/* Вкладки под меню: компактная кнопка «+» и крестик закрытия. */
+.new-tab {
+  min-width: 24px;
+  min-height: 22px;
+  margin: 2px 4px;
+  padding: 0 6px;
+}
+
+.tab-close {
+  min-width: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+.tab-close:hover {
+  background: alpha(currentColor, 0.14);
+  border-radius: 9px;
+}

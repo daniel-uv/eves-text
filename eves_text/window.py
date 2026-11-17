@@ -128,14 +128,84 @@ def app_logo() -> GdkPixbuf.Pixbuf | None:
     return None
 
 
+class DocumentTab:
+    """Одна вкладка: свой буфер, вид, путь, кодировка и орфография."""
+
+    def __init__(self, window: "MainWindow") -> None:
+        self.window = window
+        self.path: Path | None = None
+        self.encoding = "UTF-8"
+        self.counts_cache = (-1, -1, -1)
+        self.current_align = "left"
+        self.align_guard = False
+        self.popup_iter: Gtk.TextIter | None = None
+        self.caret: CaretBlinker | None = None
+
+        self.buffer = GtkSource.Buffer()
+        self.buffer.set_highlight_syntax(False)
+
+        self.view = GtkSource.View.new_with_buffer(self.buffer)
+        window._configure_view(self.view)
+
+        # Теги выравнивания абзацев у каждого документа свои.
+        self.align_tags = {
+            key: self.buffer.create_tag(f"alignment:{key}", justification=alignment)
+            for key, _icon, alignment, _tip in ALIGNMENTS
+        }
+
+        # Проверка орфографии делается своим слоем на текстовых тегах.
+        self.spellcheck = SpellCheck(self.buffer, self.view)
+        # На Windows штатная каретка GTK оставляет светлый пиксель на конце,
+        # поэтому там рисуется и мигает своя каретка.
+        if os.name == "nt":
+            self.caret = CaretBlinker(self.view)
+
+        self.scroller = Gtk.ScrolledWindow()
+        self.scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.scroller.add(self.view)
+
+        # Заголовок вкладки с кнопкой закрытия.
+        self.name_label = Gtk.Label(label="Без имени")
+        self.name_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.name_label.set_max_width_chars(28)
+        close = Gtk.Button.new_from_icon_name(
+            "window-close-symbolic", Gtk.IconSize.MENU
+        )
+        close.set_relief(Gtk.ReliefStyle.NONE)
+        close.set_focus_on_click(False)
+        close.set_tooltip_text("Закрыть вкладку")
+        close.get_style_context().add_class("tab-close")
+        close.connect("clicked", lambda *_: window.close_tab(self))
+        self.close_button = close
+
+        self.label_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.label_box.pack_start(self.name_label, False, False, 0)
+        self.label_box.pack_start(close, False, False, 0)
+        self.label_box.show_all()
+        self.scroller.show_all()
+
+    def is_pristine(self) -> bool:
+        """Пустой лист без пути и изменений — его можно занять файлом."""
+        if self.path is not None or self.buffer.get_modified():
+            return False
+        start, end = self.buffer.get_bounds()
+        return not self.buffer.get_text(start, end, True)
+
+
 class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, application: Gtk.Application) -> None:
         super().__init__(application=application, title=APP_NAME)
 
-        self.path: Path | None = None
-        self.encoding = "UTF-8"
+        self._tabs: list[DocumentTab] = []
+        self._active_tab: DocumentTab | None = None
         self._counts_timeout = 0
-        self._counts_cache = (-1, -1, -1)
+        self.undo_action = None
+        self.redo_action = None
+        self._font_size = DEFAULT_FONT_SIZE
+        self._wrap_enabled = True
+        self._line_numbers = False
+        self._highlight_line = True
+        self._spell_check = True
 
         config = user_settings.load()
         self._managed_ollama = ManagedOllama()
@@ -167,14 +237,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self._update_progress_time = 0.0
         self._destroyed = False
         self._dark_theme = False
-        self._caret: CaretBlinker | None = None
 
         self.set_default_size(1000, 700)
         self._icon_name = app_icon_name()
         self.set_icon_name(self._icon_name)
 
-        self._build_view()
         self._build_ui()
+        self._create_tab()
         self._install_actions(application)
         self._connect_signals()
         self._install_focus_handling()
@@ -183,56 +252,253 @@ class MainWindow(Gtk.ApplicationWindow):
         self._update_title()
         self._update_status()
 
-    # ------------------------------------------------------------------ UI
+    # ------------------------------------------------------------- вкладки
 
-    def _build_view(self) -> None:
-        self.buffer = GtkSource.Buffer()
-        self.buffer.set_highlight_syntax(False)
+    @property
+    def buffer(self) -> GtkSource.Buffer:
+        assert self._active_tab is not None
+        return self._active_tab.buffer
+
+    @property
+    def view(self) -> GtkSource.View:
+        assert self._active_tab is not None
+        return self._active_tab.view
+
+    @property
+    def path(self) -> Path | None:
+        return self._active_tab.path if self._active_tab is not None else None
+
+    @path.setter
+    def path(self, value: Path | None) -> None:
+        if self._active_tab is not None:
+            self._active_tab.path = Path(value) if value is not None else None
+
+    @property
+    def encoding(self) -> str:
+        return self._active_tab.encoding if self._active_tab is not None else "UTF-8"
+
+    @encoding.setter
+    def encoding(self, value: str) -> None:
+        if self._active_tab is not None:
+            self._active_tab.encoding = value
+
+    @property
+    def _align_tags(self) -> dict[str, Gtk.TextTag]:
+        assert self._active_tab is not None
+        return self._active_tab.align_tags
+
+    @property
+    def _current_align(self) -> str:
+        return self._active_tab.current_align if self._active_tab is not None else "left"
+
+    @_current_align.setter
+    def _current_align(self, value: str) -> None:
+        if self._active_tab is not None:
+            self._active_tab.current_align = value
+
+    @property
+    def _align_guard(self) -> bool:
+        return self._active_tab.align_guard if self._active_tab is not None else False
+
+    @_align_guard.setter
+    def _align_guard(self, value: bool) -> None:
+        if self._active_tab is not None:
+            self._active_tab.align_guard = value
+
+    @property
+    def spellcheck(self) -> SpellCheck:
+        assert self._active_tab is not None
+        return self._active_tab.spellcheck
+
+    @property
+    def _caret(self) -> CaretBlinker | None:
+        return self._active_tab.caret if self._active_tab is not None else None
+
+    @property
+    def _popup_iter(self) -> Gtk.TextIter | None:
+        return self._active_tab.popup_iter if self._active_tab is not None else None
+
+    @_popup_iter.setter
+    def _popup_iter(self, value: Gtk.TextIter | None) -> None:
+        if self._active_tab is not None:
+            self._active_tab.popup_iter = value
+
+    @property
+    def _counts_cache(self) -> tuple[int, int, int]:
+        if self._active_tab is None:
+            return (-1, -1, -1)
+        return self._active_tab.counts_cache
+
+    @_counts_cache.setter
+    def _counts_cache(self, value: tuple[int, int, int]) -> None:
+        if self._active_tab is not None:
+            self._active_tab.counts_cache = value
+
+    def _configure_view(self, view: GtkSource.View) -> None:
+        """Общие настройки вида для новой вкладки."""
         font = Pango.FontDescription.from_string(
-            f"{default_font_family()} {DEFAULT_FONT_SIZE}"
+            f"{default_font_family()} {self._font_size}"
         )
-
-        self.view = GtkSource.View.new_with_buffer(self.buffer)
-        self.view.modify_font(font)
+        view.modify_font(font)
         # Номера строк по умолчанию выключены (включаются в меню «Вид»).
-        self.view.set_show_line_numbers(False)
-        self.view.set_highlight_current_line(True)
-        self.view.set_auto_indent(True)
-        self.view.set_tab_width(4)
+        view.set_show_line_numbers(self._line_numbers)
+        view.set_highlight_current_line(self._highlight_line)
+        view.set_auto_indent(True)
+        view.set_tab_width(4)
         # Настоящая табуляция: Tab вставляет символ \t, а не четыре пробела.
-        self.view.set_insert_spaces_instead_of_tabs(False)
-        self.view.set_accepts_tab(True)
-        self.view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self.view.set_right_margin_position(80)
-        self.view.set_show_right_margin(False)
-        # Поля вокруг текста: документ не прилипает к краям окна,
-        # текстовый блок стоит по центру.
-        self.view.set_left_margin(TEXT_MARGIN_X)
-        self.view.set_right_margin(TEXT_MARGIN_X)
-        self.view.set_top_margin(TEXT_MARGIN_Y)
-        self.view.set_bottom_margin(TEXT_MARGIN_Y)
+        view.set_insert_spaces_instead_of_tabs(False)
+        view.set_accepts_tab(True)
+        view.set_wrap_mode(
+            Gtk.WrapMode.WORD_CHAR if self._wrap_enabled else Gtk.WrapMode.NONE
+        )
+        view.set_right_margin_position(80)
+        view.set_show_right_margin(False)
+        # Поля вокруг текста: документ не прилипает к краям окна.
+        view.set_left_margin(TEXT_MARGIN_X)
+        view.set_right_margin(TEXT_MARGIN_X)
+        view.set_top_margin(TEXT_MARGIN_Y)
+        view.set_bottom_margin(TEXT_MARGIN_Y)
         try:
-            self.view.set_smart_home_end(GtkSource.SmartHomeEndType.AFTER_FIRST_NON_WHITESPACE)
+            view.set_smart_home_end(
+                GtkSource.SmartHomeEndType.AFTER_FIRST_NON_WHITESPACE
+            )
         except AttributeError:
             pass
 
-        # Теги выравнивания абзацев (действуют на выделенные строки
-        # или на строку с курсором).
-        self._align_tags = {
-            key: self.buffer.create_tag(f"alignment:{key}", justification=alignment)
-            for key, _icon, alignment, _tip in ALIGNMENTS
-        }
-        self._current_align = "left"
-        self._align_guard = False
+    def _create_tab(self) -> DocumentTab:
+        """Создаёт новую пустую вкладку и делает её активной."""
+        tab = DocumentTab(self)
+        tab.spellcheck.set_enabled(self._spell_check)
+        self._tabs.append(tab)
+        page = self.notebook.append_page(tab.scroller, tab.label_box)
+        self.notebook.set_tab_reorderable(tab.scroller, True)
+        self._connect_tab(tab)
+        self._update_tab_label(tab)
+        self._apply_style_scheme()
+        self.notebook.set_current_page(page)
+        self._activate_tab(tab)
+        return tab
 
-        # Проверка орфографии делается своим слоем на текстовых тегах.
-        # Gspell.TextView здесь не используется: он ломает обработку клавиатуры.
-        self.spellcheck = SpellCheck(self.buffer, self.view)
-        # На Windows штатная каретка GTK оставляет светлый пиксель на конце,
-        # поэтому там рисуется и мигает своя каретка.
-        if os.name == "nt":
-            self._caret = CaretBlinker(self.view)
-        self._popup_iter = None
+    def _tab_page(self, tab: DocumentTab) -> int:
+        return self.notebook.page_num(tab.scroller)
+
+    def _tab_for_buffer(self, buffer: Gtk.TextBuffer) -> DocumentTab | None:
+        for tab in self._tabs:
+            if tab.buffer is buffer:
+                return tab
+        return None
+
+    def _connect_tab(self, tab: DocumentTab) -> None:
+        """Сигналы буфера и вида одной вкладки."""
+        tab.buffer.connect(
+            "notify::cursor-position",
+            lambda *_: self._on_tab_cursor(tab),
+        )
+        tab.buffer.connect("modified-changed", lambda *_: self._on_tab_modified(tab))
+        tab.buffer.connect("changed", lambda *_: self._on_tab_changed(tab))
+        try:
+            tab.buffer.connect("can-undo-changed", lambda *_: self._on_tab_undo(tab))
+            tab.buffer.connect("can-redo-changed", lambda *_: self._on_tab_undo(tab))
+        except TypeError:
+            pass
+
+        tab.view.connect("button-press-event", self._on_view_button_press)
+        tab.view.connect("populate-popup", self._on_populate_popup)
+        tab.buffer.connect_after("insert-text", self._on_insert_text)
+
+    def _on_tab_cursor(self, tab: DocumentTab) -> None:
+        if tab is self._active_tab:
+            self._update_status()
+
+    def _on_tab_modified(self, tab: DocumentTab) -> None:
+        self._update_tab_label(tab)
+        if tab is self._active_tab:
+            self._update_title()
+
+    def _on_tab_changed(self, tab: DocumentTab) -> None:
+        if tab is self._active_tab:
+            self._schedule_counts()
+
+    def _on_tab_undo(self, tab: DocumentTab) -> None:
+        if tab is self._active_tab:
+            self._update_undo()
+
+    def _activate_tab(self, tab: DocumentTab | None) -> None:
+        if tab is None:
+            return
+        self._active_tab = tab
+        self._update_title()
+        self.enc_label.set_text(tab.encoding)
+        self._update_status()
+        # Счётчики у каждой вкладки свои: пересчитываем при переключении.
+        tab.counts_cache = (-1, -1, -1)
+        self._update_counts()
+        self._update_undo()
+        tab.view.grab_focus()
+
+    def _select_tab(self, tab: DocumentTab) -> None:
+        page = self._tab_page(tab)
+        if page < 0:
+            return
+        if self.notebook.get_current_page() != page:
+            self.notebook.set_current_page(page)
+        self._activate_tab(tab)
+
+    def _on_switch_page(self, _notebook, page, page_num: int) -> None:
+        tab = None
+        for candidate in self._tabs:
+            if candidate.scroller is page:
+                tab = candidate
+                break
+        if tab is not None:
+            self._activate_tab(tab)
+
+    def _update_tab_label(self, tab: DocumentTab) -> None:
+        name = tab.path.name if tab.path is not None else "Без имени"
+        if tab.buffer.get_modified():
+            name = f"• {name}"
+        tab.name_label.set_text(name)
+        tab.label_box.set_tooltip_text(
+            str(tab.path) if tab.path is not None else "Новый документ"
+        )
+
+    def close_tab(self, tab: DocumentTab | None = None) -> bool:
+        """Закрывает вкладку, спрашивая о несохранённых изменениях."""
+        tab = tab or self._active_tab
+        if tab is None:
+            return False
+        if not self._confirm_discard(tab):
+            return False
+
+        page = self._tab_page(tab)
+        if tab.caret is not None:
+            tab.caret.stop()
+        if tab in self._tabs:
+            self._tabs.remove(tab)
+        if page >= 0:
+            self.notebook.remove_page(page)
+
+        if not self._tabs:
+            # Окно не должно остаться без документа.
+            self._create_tab()
+            return True
+
+        current = self.notebook.get_nth_page(self.notebook.get_current_page())
+        for candidate in self._tabs:
+            if candidate.scroller is current:
+                self._activate_tab(candidate)
+                break
+        else:
+            self._activate_tab(self._tabs[0])
+            self._select_tab(self._tabs[0])
+        return True
+
+    def _pristine_tab(self) -> DocumentTab | None:
+        if self._active_tab is not None and self._active_tab.is_pristine():
+            return self._active_tab
+        return None
+
+    # ------------------------------------------------------------------ UI
 
     def _build_ui(self) -> None:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -240,10 +506,22 @@ class MainWindow(Gtk.ApplicationWindow):
 
         box.pack_start(self._build_menubar(), False, False, 0)
 
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scrolled.add(self.view)
-        box.pack_start(scrolled, True, True, 0)
+        # Вкладки идут сразу под меню; «+» стоит в конце полосы вкладок.
+        self.notebook = Gtk.Notebook()
+        self.notebook.set_scrollable(True)
+        self.notebook.set_show_border(False)
+        self.notebook.connect("switch-page", self._on_switch_page)
+
+        self.new_tab_button = Gtk.Button(label="+")
+        self.new_tab_button.set_relief(Gtk.ReliefStyle.NONE)
+        self.new_tab_button.set_tooltip_text("Новая вкладка (Ctrl+N)")
+        self.new_tab_button.get_style_context().add_class("new-tab")
+        self.new_tab_button.connect("clicked", lambda *_: self.action_new())
+        self.notebook.set_action_widget(
+            self.new_tab_button, Gtk.PositionType.RIGHT
+        )
+        self.new_tab_button.show()
+        box.pack_start(self.notebook, True, True, 0)
 
         box.pack_start(self._build_bottom_bar(), False, False, 0)
         box.pack_start(self._build_statusbar(), False, False, 0)
@@ -327,6 +605,10 @@ class MainWindow(Gtk.ApplicationWindow):
         file_item.set_submenu(file_menu)
         file_menu.append(self._item("_Новый", "win.new"))
         file_menu.append(self._item("_Открыть…", "win.open"))
+        file_menu.append(Gtk.SeparatorMenuItem())
+        file_menu.append(self._item("_Закрыть вкладку", "win.close-tab"))
+        file_menu.append(self._item("С_ледующая вкладка", "win.next-tab"))
+        file_menu.append(self._item("Пре_дыдущая вкладка", "win.prev-tab"))
         file_menu.append(Gtk.SeparatorMenuItem())
         file_menu.append(self._item("_Сохранить", "win.save"))
         file_menu.append(self._item("Сохранить _как…", "win.save-as"))
@@ -433,6 +715,9 @@ class MainWindow(Gtk.ApplicationWindow):
         entries: list[tuple[str, object, list[str] | None]] = [
             ("new", self.action_new, ["<Primary>n"]),
             ("open", self.action_open, ["<Primary>o"]),
+            ("close-tab", self.action_close_tab, ["<Primary>w"]),
+            ("next-tab", self.action_next_tab, ["<Primary>Tab"]),
+            ("prev-tab", self.action_prev_tab, ["<Primary><Shift>Tab"]),
             ("save", self.action_save, ["<Primary>s"]),
             ("save-as", self.action_save_as, ["<Primary><Shift>s"]),
             ("undo", self.action_undo, ["<Primary>z"]),
@@ -458,11 +743,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self.redo_action = self.lookup_action("redo")
 
         toggles = [
-            ("wrap", self.view.get_wrap_mode() != Gtk.WrapMode.NONE, self._set_wrap),
-            ("line-numbers", self.view.get_show_line_numbers(), self._set_line_numbers),
+            ("wrap", self._wrap_enabled, self._set_wrap),
+            ("line-numbers", self._line_numbers, self._set_line_numbers),
             (
                 "highlight-line",
-                self.view.get_highlight_current_line(),
+                self._highlight_line,
                 self._set_highlight_line,
             ),
             ("spell-check", self._spell_enabled(), self._set_spell_check),
@@ -484,19 +769,32 @@ class MainWindow(Gtk.ApplicationWindow):
             self.lookup_action("spell-check").set_enabled(False)
 
     def _spell_enabled(self) -> bool:
-        return self.spellcheck.enabled
+        if not self._spell_check:
+            return False
+        if self._active_tab is None:
+            return True
+        return self.spellcheck.available
 
     def _set_wrap(self, enabled: bool) -> None:
-        self.view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR if enabled else Gtk.WrapMode.NONE)
+        self._wrap_enabled = enabled
+        mode = Gtk.WrapMode.WORD_CHAR if enabled else Gtk.WrapMode.NONE
+        for tab in self._tabs:
+            tab.view.set_wrap_mode(mode)
 
     def _set_line_numbers(self, enabled: bool) -> None:
-        self.view.set_show_line_numbers(enabled)
+        self._line_numbers = enabled
+        for tab in self._tabs:
+            tab.view.set_show_line_numbers(enabled)
 
     def _set_highlight_line(self, enabled: bool) -> None:
-        self.view.set_highlight_current_line(enabled)
+        self._highlight_line = enabled
+        for tab in self._tabs:
+            tab.view.set_highlight_current_line(enabled)
 
     def _set_spell_check(self, enabled: bool) -> None:
-        self.spellcheck.set_enabled(enabled)
+        self._spell_check = enabled
+        for tab in self._tabs:
+            tab.spellcheck.set_enabled(enabled)
 
     # ------------------------------------------------------------- formatting
 
@@ -505,10 +803,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self.view.grab_focus()
 
     def _on_font_size_changed(self, spin: Gtk.SpinButton) -> None:
-        size = int(spin.get_value())
-        self.view.modify_font(
-            Pango.FontDescription.from_string(f"{default_font_family()} {size}")
+        self._font_size = int(spin.get_value())
+        font = Pango.FontDescription.from_string(
+            f"{default_font_family()} {self._font_size}"
         )
+        for tab in self._tabs:
+            tab.view.modify_font(font)
 
     def _on_alignment_toggled(self, button: Gtk.ToggleButton, key: str) -> None:
         if self._align_guard:
@@ -563,37 +863,46 @@ class MainWindow(Gtk.ApplicationWindow):
         end.forward_line()
         return start, end
 
-    def _alignment_at(self, offset: int) -> str | None:
+    def _alignment_at(
+        self,
+        buffer: Gtk.TextBuffer,
+        tags: dict[str, Gtk.TextTag],
+        offset: int,
+    ) -> str | None:
         if offset < 0:
             return None
-        iterator = self.buffer.get_iter_at_offset(offset)
-        for key, tag in self._align_tags.items():
+        iterator = buffer.get_iter_at_offset(offset)
+        for key, tag in tags.items():
             if iterator.has_tag(tag):
                 return key
         return None
 
-    def _on_insert_text(self, _buffer, location, text, _length) -> None:
+    def _on_insert_text(self, buffer, location, text, _length) -> None:
         """Продлевает выравнивание на новый текст и новые абзацы."""
+        tab = self._tab_for_buffer(buffer)
+        if tab is None:
+            return
+        tags = tab.align_tags
         end_offset = location.get_offset()
         start_offset = end_offset - len(text)
 
         if "\n" in text:
             # Enter: помечаем сам перевод строки, чтобы следующая пустая
             # строка унаследовала выравнивание предыдущей.
-            key = self._alignment_at(start_offset - 1)
+            key = self._alignment_at(buffer, tags, start_offset - 1)
             if key is not None:
-                start = self.buffer.get_iter_at_offset(start_offset)
-                end = self.buffer.get_iter_at_offset(end_offset)
-                self.buffer.apply_tag(self._align_tags[key], start, end)
+                start = buffer.get_iter_at_offset(start_offset)
+                end = buffer.get_iter_at_offset(end_offset)
+                buffer.apply_tag(tags[key], start, end)
             return
 
         # Первый символ в пустой строке наследует выравнивание предыдущей;
         # текст в конце выровненной строки тоже нужно пометить.
-        line_start = self.buffer.get_iter_at_offset(start_offset)
+        line_start = buffer.get_iter_at_offset(start_offset)
         line_start.set_line_offset(0)
         at_line_start = line_start.get_offset() == start_offset
 
-        line_end = self.buffer.get_iter_at_offset(end_offset)
+        line_end = buffer.get_iter_at_offset(end_offset)
         line_end.forward_to_line_end()
         line_was_empty = at_line_start and line_end.get_offset() == end_offset
 
@@ -601,18 +910,18 @@ class MainWindow(Gtk.ApplicationWindow):
             # Начало обычной строки не должно наследовать чужое выравнивание.
             return
 
-        key = self._alignment_at(start_offset - 1)
+        key = self._alignment_at(buffer, tags, start_offset - 1)
         if key is None:
             return
 
         if line_was_empty:
-            line_end = self.buffer.get_iter_at_offset(start_offset)
+            line_end = buffer.get_iter_at_offset(start_offset)
             line_end.forward_line()
-            self.buffer.apply_tag(self._align_tags[key], line_start, line_end)
+            buffer.apply_tag(tags[key], line_start, line_end)
         else:
-            start = self.buffer.get_iter_at_offset(start_offset)
-            end = self.buffer.get_iter_at_offset(end_offset)
-            self.buffer.apply_tag(self._align_tags[key], start, end)
+            start = buffer.get_iter_at_offset(start_offset)
+            end = buffer.get_iter_at_offset(end_offset)
+            buffer.apply_tag(tags[key], start, end)
 
     def _sync_alignment_buttons(self) -> None:
         iterator = self.buffer.get_iter_at_mark(self.buffer.get_insert())
@@ -633,15 +942,6 @@ class MainWindow(Gtk.ApplicationWindow):
     # -------------------------------------------------------------- signals
 
     def _connect_signals(self) -> None:
-        self.buffer.connect("notify::cursor-position", lambda *_: self._update_status())
-        self.buffer.connect("modified-changed", lambda *_: self._update_title())
-        self.buffer.connect("changed", lambda *_: self._schedule_counts())
-        try:
-            self.buffer.connect("can-undo-changed", lambda *_: self._update_undo())
-            self.buffer.connect("can-redo-changed", lambda *_: self._update_undo())
-        except TypeError:
-            pass
-
         self.connect("delete-event", self._on_delete_event)
         self.connect("map", self._on_map)
 
@@ -654,14 +954,9 @@ class MainWindow(Gtk.ApplicationWindow):
         if settings is not None:
             settings.connect("notify::gtk-theme-name", lambda *_: self._apply_style_scheme())
 
-        # Контекстное меню: подсказки правописания.
-        self.view.connect("button-press-event", self._on_view_button_press)
-        self.view.connect("populate-popup", self._on_populate_popup)
-
-        # Выравнивание должно переходить на набранный текст.
-        self.buffer.connect_after("insert-text", self._on_insert_text)
-
     def _update_undo(self) -> None:
+        if self._active_tab is None or self.undo_action is None:
+            return
         self.undo_action.set_enabled(self.buffer.can_undo())
         self.redo_action.set_enabled(self.buffer.can_redo())
 
@@ -856,8 +1151,11 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_message("Сначала выделите текст для проверки")
             return
 
+        tab = self._active_tab
+        if tab is None:
+            return
         start, end = bounds
-        text = self.buffer.get_text(start, end, True)
+        text = tab.buffer.get_text(start, end, True)
         if not text.strip():
             self._show_message("Выделенный фрагмент пуст")
             return
@@ -866,7 +1164,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._show_message("Проверяю готовность ИИ…", seconds=0)
         threading.Thread(
             target=self._ai_probe_worker,
-            args=(text, start.get_offset()),
+            args=(tab, text, start.get_offset()),
             daemon=True,
         ).start()
 
@@ -890,7 +1188,9 @@ class MainWindow(Gtk.ApplicationWindow):
             ai_check.configure(base_url=base_url, model=self._model_name)
             return base_url
 
-    def _ai_probe_worker(self, text: str, offset: int) -> None:
+    def _ai_probe_worker(
+        self, tab: DocumentTab, text: str, offset: int
+    ) -> None:
         state = "offline"
         error: str | None = None
         try:
@@ -900,12 +1200,18 @@ class MainWindow(Gtk.ApplicationWindow):
             error = str(exc)
         except Exception as exc:  # noqa: BLE001 - поток не должен падать молча
             error = f"Неожиданная ошибка: {exc}"
-        GLib.idle_add(self._ai_probe_finished, text, offset, state, error)
+        GLib.idle_add(self._ai_probe_finished, tab, text, offset, state, error)
 
     def _ai_probe_finished(
-        self, text: str, offset: int, state: str, error: str | None
+        self,
+        tab: DocumentTab,
+        text: str,
+        offset: int,
+        state: str,
+        error: str | None,
     ) -> bool:
-        if not self.get_realized():
+        if not self.get_realized() or tab not in self._tabs:
+            self._ai_busy = False
             return False
 
         if error is not None:
@@ -944,7 +1250,7 @@ class MainWindow(Gtk.ApplicationWindow):
             f"Проверяю текст с ИИ (модель {self._model_name})…", seconds=0
         )
         threading.Thread(
-            target=self._ai_worker, args=(text, offset), daemon=True
+            target=self._ai_worker, args=(tab, text, offset), daemon=True
         ).start()
         return False
 
@@ -1390,7 +1696,7 @@ class MainWindow(Gtk.ApplicationWindow):
             )
         return False
 
-    def _ai_worker(self, text: str, offset: int) -> None:
+    def _ai_worker(self, tab: DocumentTab, text: str, offset: int) -> None:
         corrected: str | None = None
         error: str | None = None
         try:
@@ -1399,17 +1705,18 @@ class MainWindow(Gtk.ApplicationWindow):
             error = str(exc)
         except Exception as exc:  # noqa: BLE001 - поток не должен падать молча
             error = f"Неожиданная ошибка: {exc}"
-        GLib.idle_add(self._ai_finished, text, offset, corrected, error)
+        GLib.idle_add(self._ai_finished, tab, text, offset, corrected, error)
 
     def _ai_finished(
         self,
+        tab: DocumentTab,
         original: str,
         offset: int,
         corrected: str | None,
         error: str | None,
     ) -> bool:
         self._ai_busy = False
-        if not self.get_realized():
+        if not self.get_realized() or tab not in self._tabs:
             return False
 
         if error is not None:
@@ -1418,9 +1725,9 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
 
         end_offset = offset + len(original)
-        start = self.buffer.get_iter_at_offset(offset)
-        end = self.buffer.get_iter_at_offset(end_offset)
-        if self.buffer.get_text(start, end, True) != original:
+        start = tab.buffer.get_iter_at_offset(offset)
+        end = tab.buffer.get_iter_at_offset(end_offset)
+        if tab.buffer.get_text(start, end, True) != original:
             self._show_message("Текст изменился во время проверки — результат не применён")
             return False
 
@@ -1429,17 +1736,19 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_message("ИИ не нашёл ошибок")
             return False
 
-        self.buffer.begin_user_action()
+        # Показываем вкладку, в которой исправляется текст.
+        self._select_tab(tab)
+        tab.buffer.begin_user_action()
         try:
-            self.buffer.delete(start, end)
-            insert_at = self.buffer.get_iter_at_offset(offset)
-            self.buffer.insert(insert_at, corrected)
-            self.buffer.select_range(
-                self.buffer.get_iter_at_offset(offset),
-                self.buffer.get_iter_at_offset(offset + len(corrected)),
+            tab.buffer.delete(start, end)
+            insert_at = tab.buffer.get_iter_at_offset(offset)
+            tab.buffer.insert(insert_at, corrected)
+            tab.buffer.select_range(
+                tab.buffer.get_iter_at_offset(offset),
+                tab.buffer.get_iter_at_offset(offset + len(corrected)),
             )
         finally:
-            self.buffer.end_user_action()
+            tab.buffer.end_user_action()
 
         self._show_message(
             f"ИИ исправил текст ({len(original)} → {len(corrected)} символов). "
@@ -1744,7 +2053,8 @@ class MainWindow(Gtk.ApplicationWindow):
             fallback = "oblivion" if dark else "classic"
             scheme = manager.get_scheme(fallback)
         if scheme is not None:
-            self.buffer.set_style_scheme(scheme)
+            for tab in self._tabs:
+                tab.buffer.set_style_scheme(scheme)
         self._apply_windows_titlebar()
 
     def _on_map(self, *_args) -> None:
@@ -1772,29 +2082,58 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ------------------------------------------------------------------ text
 
-    def get_text(self) -> str:
-        start, end = self.buffer.get_bounds()
-        return self.buffer.get_text(start, end, True)
+    def get_text(self, tab: DocumentTab | None = None) -> str:
+        target = tab or self._active_tab
+        if target is None:
+            return ""
+        start, end = target.buffer.get_bounds()
+        return target.buffer.get_text(start, end, True)
 
     def set_text(self, text: str, path: Path | None = None) -> None:
+        if self._active_tab is None:
+            return
+        target = self._active_tab
+        self._load_tab_text(
+            target,
+            text,
+            Path(path) if path is not None else None,
+            target.encoding,
+        )
+        self._activate_tab(target)
+
+    def _load_tab_text(
+        self,
+        tab: DocumentTab,
+        text: str,
+        path: Path | None,
+        encoding: str,
+    ) -> None:
+        """Заменяет содержимое вкладки, не создавая шагов отмены."""
         try:
-            self.buffer.begin_not_undoable_action()
-            self.buffer.set_text(text)
+            tab.buffer.begin_not_undoable_action()
+            tab.buffer.set_text(text)
         finally:
             try:
-                self.buffer.end_not_undoable_action()
+                tab.buffer.end_not_undoable_action()
             except Exception:  # noqa: BLE001
                 pass
-        self.buffer.set_modified(False)
-        self.path = Path(path) if path is not None else None
-        self.buffer.place_cursor(self.buffer.get_start_iter())
-        self.view.scroll_to_iter(self.buffer.get_start_iter(), 0.0, False, 0.0, 0.0)
-        self._update_title()
-        self._update_status()
-        self._update_counts()
-        self._update_undo()
-        self.spellcheck.schedule()
-        self.view.grab_focus()
+        tab.buffer.set_modified(False)
+        tab.path = Path(path) if path is not None else None
+        tab.encoding = encoding
+        tab.counts_cache = (-1, -1, -1)
+        tab.buffer.place_cursor(tab.buffer.get_start_iter())
+        tab.view.scroll_to_iter(
+            tab.buffer.get_start_iter(), 0.0, False, 0.0, 0.0
+        )
+        tab.spellcheck.schedule()
+        self._update_tab_label(tab)
+        if tab is self._active_tab:
+            self.enc_label.set_text(tab.encoding)
+            self._update_title()
+            self._update_status()
+            self._update_counts()
+            self._update_undo()
+            tab.view.grab_focus()
 
     # ------------------------------------------------------------------ files
 
@@ -1805,22 +2144,19 @@ class MainWindow(Gtk.ApplicationWindow):
         except OSError as exc:
             self._show_error("Не удалось открыть файл", str(exc))
             return
-        self.set_text(text, path)
-        self.encoding = encoding
-        self.enc_label.set_text(encoding)
-        self._update_title()
+
+        # Пустой лист без изменений можно занять открытым файлом,
+        # иначе файл получает собственную вкладку.
+        tab = self._pristine_tab()
+        if tab is None:
+            tab = self._create_tab()
+        self._load_tab_text(tab, text, path, encoding)
+        self._select_tab(tab)
 
     def action_new(self, *_args) -> None:
-        if not self._confirm_discard():
-            return
-        self.encoding = "UTF-8"
-        self.enc_label.set_text(self.encoding)
-        self.set_text("", None)
+        self._create_tab()
 
     def action_open(self, *_args) -> None:
-        if not self._confirm_discard():
-            return
-
         dialog = Gtk.FileChooserNative.new(
             "Открыть файл", self, Gtk.FileChooserAction.OPEN, "_Открыть", "_Отмена"
         )
@@ -1831,20 +2167,41 @@ class MainWindow(Gtk.ApplicationWindow):
         if response == Gtk.ResponseType.ACCEPT and path:
             self.open_path(path)
 
+    def action_close_tab(self, *_args) -> None:
+        self.close_tab()
+
+    def action_next_tab(self, *_args) -> None:
+        if len(self._tabs) > 1:
+            self.notebook.next_page()
+
+    def action_prev_tab(self, *_args) -> None:
+        if len(self._tabs) > 1:
+            self.notebook.prev_page()
+
     def action_save(self, *_args) -> bool:
-        if self.path is None:
-            return self.action_save_as()
-        return self._save_to(self.path)
+        return self._save_tab(self._active_tab)
 
     def action_save_as(self, *_args) -> bool:
+        return self._save_tab_as(self._active_tab)
+
+    def _save_tab(self, tab: DocumentTab | None) -> bool:
+        if tab is None:
+            return False
+        if tab.path is None:
+            return self._save_tab_as(tab)
+        return self._write_tab(tab, tab.path)
+
+    def _save_tab_as(self, tab: DocumentTab | None) -> bool:
+        if tab is None:
+            return False
         dialog = Gtk.FileChooserNative.new(
             "Сохранить как", self, Gtk.FileChooserAction.SAVE, "_Сохранить", "_Отмена"
         )
         dialog.set_do_overwrite_confirmation(True)
         self._add_filters(dialog)
-        if self.path is not None:
-            dialog.set_current_name(self.path.name)
-            dialog.set_current_folder(str(self.path.parent))
+        if tab.path is not None:
+            dialog.set_current_name(tab.path.name)
+            dialog.set_current_folder(str(tab.path.parent))
         else:
             dialog.set_current_name("Без имени.txt")
 
@@ -1853,17 +2210,19 @@ class MainWindow(Gtk.ApplicationWindow):
         dialog.destroy()
         if response != Gtk.ResponseType.ACCEPT or not path:
             return False
-        return self._save_to(Path(path))
+        return self._write_tab(tab, Path(path))
 
-    def _save_to(self, path: Path) -> bool:
+    def _write_tab(self, tab: DocumentTab, path: Path) -> bool:
         try:
-            document.write_text(path, self.get_text())
+            document.write_text(path, self.get_text(tab))
         except OSError as exc:
             self._show_error("Не удалось сохранить файл", str(exc))
             return False
-        self.path = Path(path)
-        self.buffer.set_modified(False)
-        self._update_title()
+        tab.path = Path(path)
+        tab.buffer.set_modified(False)
+        self._update_tab_label(tab)
+        if tab is self._active_tab:
+            self._update_title()
         return True
 
     @staticmethod
@@ -1919,11 +2278,17 @@ class MainWindow(Gtk.ApplicationWindow):
     # --------------------------------------------------------------- status
 
     def _update_title(self) -> None:
+        if self._active_tab is None:
+            self.set_title(APP_NAME)
+            return
         name = self.path.name if self.path is not None else "Без имени"
         mark = "• " if self.buffer.get_modified() else ""
         self.set_title(f"{mark}{name} — {APP_NAME}")
 
     def _update_status(self) -> None:
+        if self._active_tab is None:
+            self.pos_label.set_text("Стр 1, Стлб 1")
+            return
         iterator = self.buffer.get_iter_at_mark(self.buffer.get_insert())
         self.pos_label.set_text(
             f"Стр {iterator.get_line() + 1}, Стлб {iterator.get_line_offset() + 1}"
@@ -1937,6 +2302,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _update_counts(self) -> bool:
         self._counts_timeout = 0
+        if self._active_tab is None:
+            self.counts_label.set_text("")
+            return False
         stats = document.text_stats(self.get_text())
         if stats != self._counts_cache:
             self._counts_cache = stats
@@ -1956,12 +2324,13 @@ class MainWindow(Gtk.ApplicationWindow):
         dialog.run()
         dialog.destroy()
 
-    def _confirm_discard(self) -> bool:
+    def _confirm_discard(self, tab: DocumentTab | None = None) -> bool:
         """True — можно продолжать; False — пользователь отменил."""
-        if not self.buffer.get_modified():
+        target = tab or self._active_tab
+        if target is None or not target.buffer.get_modified():
             return True
 
-        name = self.path.name if self.path is not None else "Без имени"
+        name = target.path.name if target.path is not None else "Без имени"
         dialog = Gtk.MessageDialog(
             transient_for=self,
             modal=True,
@@ -1978,27 +2347,37 @@ class MainWindow(Gtk.ApplicationWindow):
         dialog.destroy()
 
         if response == Gtk.ResponseType.YES:
-            return self.action_save()
+            return self._save_tab(target)
         return response == Gtk.ResponseType.NO
 
     def _on_delete_event(self, *_args) -> bool:
-        return not self._confirm_discard()
+        # Перед закрытием окна проверяем все вкладки, а не только активную.
+        for tab in list(self._tabs):
+            if not self._confirm_discard(tab):
+                return True
+        return False
 
     def _on_destroy(self, *_args) -> None:
         """Останавливает скачивание и отдельную службу при закрытии окна."""
         self._destroyed = True
-        if self._caret is not None:
-            self._caret.stop()
+        for tab in self._tabs:
+            if tab.caret is not None:
+                tab.caret.stop()
         if self._ai_pull_cancel is not None:
             self._ai_pull_cancel.set()
         self._managed_ollama.stop()
 
     def _on_drag_data(self, widget, context, x, y, data, info, time) -> None:
         uris = data.get_uris() or []
-        path = Gio.File.new_for_uri(uris[0]).get_path() if uris else None
-        if path and self._confirm_discard():
+        paths = []
+        for uri in uris:
+            gfile = Gio.File.new_for_uri(uri)
+            path = gfile.get_path()
+            if path:
+                paths.append(path)
+        for path in paths:
             self.open_path(path)
-        Gtk.drag_finish(context, bool(path), False, time)
+        Gtk.drag_finish(context, bool(paths), False, time)
 
     def _on_about(self, *_args) -> None:
         dialog = Gtk.AboutDialog(transient_for=self, modal=True)

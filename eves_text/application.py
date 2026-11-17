@@ -116,9 +116,11 @@ class Application(Gtk.Application):
         window = self.props.active_window
         if window is None or not files:
             return
-        path = files[0].get_path()
-        if path:
-            window.open_path(path)
+        # Каждый файл открывается в своей вкладке.
+        for gfile in files:
+            path = gfile.get_path()
+            if path:
+                window.open_path(path)
 
 
 def main(argv: list[str] | None = None) -> int:

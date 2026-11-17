@@ -9,6 +9,7 @@
 ## Возможности
 
 - Открытие и сохранение UTF-8/CP1251, атомарная запись, защита от потери правок
+- Вкладки: в каждой свой документ, новая вкладка — кнопкой «+» под меню
 - Проверка орфографии через gspell (`ru_RU`): подчёркивание ошибок, замена,
   добавление в словарь
 - Проверка с ИИ: выделить текст → правый клик → «Проверить с ИИ»; работает
@@ -27,7 +28,7 @@
 и установите:
 
 ```bash
-sudo dpkg -i eves-text_0.6.17-1_all.deb
+sudo dpkg -i eves-text_0.6.18-1_all.deb
 eves-text
 ```
 
@@ -36,12 +37,12 @@ eves-text
 Сборка пакета:
 
 ```bash
-./packaging/build-deb.sh        # -> dist/eves-text_0.6.17-1_all.deb
+./packaging/build-deb.sh        # -> dist/eves-text_0.6.18-1_all.deb
 ```
 
 ### Windows 11
 
-В [Windows-релизе](https://github.com/daniel-uv/eves-text/releases/tag/win-v0.6.17)
+В [Windows-релизе](https://github.com/daniel-uv/eves-text/releases/tag/win-v0.6.18)
 есть установщик `.exe` и портативный `.zip`. Рантайм (Python, GTK, словари)
 уже включён — устанавливать ничего дополнительно не нужно.
 
@@ -77,6 +78,8 @@ curl -fsSL https://ollama.com/install.sh | sh
 | Действие | Клавиши |
 |---|---|
 | Новый / открыть | Ctrl+N / Ctrl+O |
+| Закрыть вкладку | Ctrl+W |
+| Следующая / предыдущая вкладка | Ctrl+Tab / Ctrl+Shift+Tab |
 | Сохранить / сохранить как | Ctrl+S / Ctrl+Shift+S |
 | Отменить / вернуть | Ctrl+Z / Ctrl+Shift+Z |
 | Вырезать / копировать / вставить | Ctrl+X / Ctrl+C / Ctrl+V |

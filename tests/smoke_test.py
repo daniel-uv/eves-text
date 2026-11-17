@@ -422,6 +422,39 @@ def test_window() -> None:
     window._update_counts()
     assert "симв" in window.counts_label.get_text()
 
+    # Вкладки: каждая хранит свой документ независимо от других.
+    window.buffer.set_modified(False)
+    first = window._active_tab
+    window.action_new()
+    assert len(window._tabs) == 2
+    second = window._active_tab
+    assert second is not first
+    assert window.get_text() == ""
+    window.set_text("Второй документ", Path("/tmp/второй.txt"))
+    assert "второй.txt" in window.get_title()
+    assert "2 сл." in window.counts_label.get_text()
+
+    window._select_tab(first)
+    assert window.get_text() == "Он пришёл в течении дня."
+    assert "пример.txt" in window.get_title()
+    assert "5 сл." in window.counts_label.get_text()
+
+    first.buffer.set_modified(True)
+    assert window.get_title().startswith("• ")
+    assert first.name_label.get_text().startswith("• ")
+    first.buffer.set_modified(False)
+
+    assert window.close_tab(second)
+    assert len(window._tabs) == 1
+    assert window._active_tab is first
+    assert window.get_text() == "Он пришёл в течении дня."
+
+    # Закрытие последней вкладки оставляет окно с чистым листом.
+    assert window.close_tab(first)
+    assert len(window._tabs) == 1
+    assert window.get_text() == ""
+    assert window.get_title().startswith("Без имени")
+
     window.destroy()
 
 
