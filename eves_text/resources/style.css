@@ -38,6 +38,12 @@
   min-height: 22px;
 }
 
+/* Рамка поля размера шрифта: тёмно-серая, чтобы не сливалась с панелью. */
+.bottom-bar spinbutton entry {
+  border: 1px solid #5a5a5a;
+  border-radius: 4px;
+}
+
 /* У поля размера шрифта уже есть свои кнопки «−» и «+»,
    поэтому встроенные кнопки спинора скрываем. */
 .bottom-bar spinbutton button.down,
