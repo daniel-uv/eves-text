@@ -19,6 +19,11 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
+# Цвет каретки задаём явно: системный ``caret-color`` в Windows не следует
+# за темой приложения и остаётся тёмным даже на тёмном фоне поля ввода.
+_LIGHT_CARET = "#202124"
+_DARK_CARET = "#d6d6d6"
+
 
 class CaretBlinker:
     """Своя мигающая каретка для текстового вида.
@@ -27,8 +32,9 @@ class CaretBlinker:
     работает без этого дефекта.
     """
 
-    def __init__(self, view: Gtk.TextView) -> None:
+    def __init__(self, view: Gtk.TextView, dark: bool = False) -> None:
         self.view = view
+        self._dark = bool(dark)
         self._visible = True
         self._rect: tuple[int, int, int, int] | None = None
         self._timeout = 0
@@ -47,6 +53,16 @@ class CaretBlinker:
         # Штатная каретка больше не нужна: её мигание и оставляло пиксель.
         view.set_cursor_visible(False)
         self._schedule()
+
+    def set_dark(self, dark: bool) -> None:
+        """Менять цвет каретки вместе с темой приложения."""
+        dark = bool(dark)
+        if dark == self._dark:
+            return
+        self._dark = dark
+        # Каретка может быть сейчас невидимой, поэтому обновляем и прежнюю,
+        # и текущую область — так не останется пиксель старого цвета.
+        self._invalidate()
 
     # ------------------------------------------------------------- рисование
 
@@ -70,13 +86,9 @@ class CaretBlinker:
         return False
 
     def _cursor_color(self) -> Gdk.RGBA:
-        context = self.view.get_style_context()
-        state = context.get_state()
-        try:
-            color = context.get_property("caret-color", state)
-        except (AttributeError, TypeError):
-            color = None
-        return color or context.get_color(state)
+        color = Gdk.RGBA()
+        color.parse(_DARK_CARET if self._dark else _LIGHT_CARET)
+        return color
 
     def _caret_rect(self) -> tuple[int, int, int, int] | None:
         buffer = self.view.get_buffer()

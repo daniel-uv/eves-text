@@ -176,7 +176,7 @@ def test_caret_blinker() -> None:
     while Gtk.events_pending():
         Gtk.main_iteration_do(False)
 
-    blinker = CaretBlinker(view)
+    blinker = CaretBlinker(view, dark=True)
     # Штатная каретка скрыта: вместо неё рисуется своя.
     assert view.get_cursor_visible() is False
 
@@ -188,8 +188,15 @@ def test_caret_blinker() -> None:
     assert top >= 0, rect
     assert left >= 0, rect
 
+    # В тёмной теме каретка светлая: системный caret-color в Windows этим
+    # не управляет, поэтому цвет задаётся явно и меняется с темой.
     color = blinker._cursor_color()
+    assert color.red > 0.75 and color.green > 0.75 and color.blue > 0.75, color
     assert 0.0 <= color.alpha <= 1.0
+    blinker.set_dark(False)
+    color = blinker._cursor_color()
+    assert color.red < 0.2 and color.green < 0.2 and color.blue < 0.2, color
+    blinker.set_dark(True)
 
     blinker.stop()
     assert blinker._timeout == 0
@@ -605,21 +612,45 @@ def test_window() -> None:
         action = window.lookup_action("dark-theme")
         assert action is not None
         initial = window._dark_theme
+        # На Windows каретка рисуется своей. Проверяем, что смена темы
+        # обновляет её цвет; на Linux создаём объект вручную для теста.
+        from eves_text.caret import CaretBlinker
+
+        caret_tab = window._active_tab
+        caret_tab.caret = CaretBlinker(caret_tab.view, dark=initial)
+        assert (caret_tab.caret._cursor_color().red > 0.75) is initial
+
         window.activate_action("dark-theme", None)
         assert window._dark_theme is (not initial)
         assert window.get_style_context().has_class("dark-theme") is (not initial)
         assert action.get_state().get_boolean() is (not initial)
+        assert (caret_tab.caret._cursor_color().red > 0.75) is (not initial)
         if Gdk.Screen.get_default() is not None:
             # Глобальный тёмный CSS включается для popup-меню и списков.
             assert app._dark_style_active is (not initial)
         window.activate_action("dark-theme", None)
         assert window._dark_theme is initial
+        assert (caret_tab.caret._cursor_color().red > 0.75) is initial
         if Gdk.Screen.get_default() is not None:
             assert app._dark_style_active is initial
     finally:
         gtk_settings.set_property("gtk-application-prefer-dark-theme", old_dark)
         gtk_settings.set_property("gtk-theme-name", old_theme)
         user_settings.save = original_save
+
+    # Средняя кнопка мыши: по вкладке закрывает её, по пустому месту полосы
+    # открывает новую — как в браузере.
+    window.action_new()
+    assert len(window._tabs) == 2
+    closing = window._active_tab
+    middle = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+    middle.button = 2
+    assert closing.tab.emit("button-press-event", middle) is True
+    assert len(window._tabs) == 1
+    assert closing not in window._tabs
+    assert window.tab_strip_event.emit("button-press-event", middle) is True
+    assert len(window._tabs) == 2
+    assert window.tab_bar.get_children()[-1] is window.new_tab_button
 
     window.destroy()
 

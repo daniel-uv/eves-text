@@ -169,7 +169,9 @@ class DocumentTab:
         # На Windows штатная каретка GTK оставляет светлый пиксель на конце,
         # поэтому там рисуется и мигает своя каретка.
         if os.name == "nt":
-            self.caret = CaretBlinker(self.view)
+            self.caret = CaretBlinker(
+                self.view, dark=getattr(window, "_dark_theme", False)
+            )
 
         self.scroller = Gtk.ScrolledWindow()
         self.scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -350,6 +352,10 @@ class DocumentTab:
         if event.button == 1:
             self.window._select_tab(self)
             self.window._start_tab_drag(self, event.x_root, event.y_root)
+            return True
+        if event.button == 2:
+            # Как в браузере: средний клик по вкладке закрывает её.
+            self.window.close_tab(self)
             return True
         return False
 
@@ -878,6 +884,13 @@ class MainWindow(Gtk.ApplicationWindow):
         tab.view.connect("populate-popup", self._on_populate_popup)
         tab.buffer.connect_after("insert-text", self._on_insert_text)
 
+    def _on_tab_strip_clicked(self, _widget, event) -> bool:
+        """Средний клик по свободному месту полосы открывает вкладку."""
+        if event.button == 2:
+            self.action_new()
+            return True
+        return False
+
     def _on_tab_cursor(self, tab: DocumentTab) -> None:
         if tab is self._active_tab:
             self._update_status()
@@ -996,6 +1009,14 @@ class MainWindow(Gtk.ApplicationWindow):
         strip_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         strip_row.get_style_context().add_class("tab-strip-row")
 
+        # У самого Box нет своего GDK-окна, поэтому средний клик по свободному
+        # месту полосы ловит EventBox, растянутый на всю ширину строки.
+        self.tab_strip_event = Gtk.EventBox()
+        self.tab_strip_event.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.tab_strip_event.connect(
+            "button-press-event", self._on_tab_strip_clicked
+        )
+
         strip = Gtk.ScrolledWindow()
         strip.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
         strip.set_propagate_natural_height(True)
@@ -1019,7 +1040,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.tab_bar.pack_start(self.new_tab_button, False, False, 0)
 
         strip.add(self.tab_bar)
-        strip_row.pack_start(strip, False, False, 0)
+        self.tab_strip_event.add(strip)
+        strip_row.pack_start(self.tab_strip_event, True, True, 0)
         box.pack_start(strip_row, False, False, 0)
 
         self.stack = Gtk.Stack()
@@ -2629,6 +2651,10 @@ class MainWindow(Gtk.ApplicationWindow):
             for tab in self._tabs:
                 tab.buffer.set_style_scheme(scheme)
         for tab in self._tabs:
+            # На Windows системный caret-color не следует за темой: цвет
+            # своей каретки обновляем вместе со схемой подсветки.
+            if tab.caret is not None:
+                tab.caret.set_dark(dark)
             tab.refresh_visuals()
         self._apply_windows_titlebar()
 
