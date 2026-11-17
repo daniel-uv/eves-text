@@ -145,7 +145,7 @@ class DocumentTab:
         self.path: Path | None = None
         self.encoding = "UTF-8"
         self.counts_cache = (-1, -1, -1)
-        self.current_align = "left"
+        self.current_align = window._default_align
         self.align_guard = False
         self.popup_iter: Gtk.TextIter | None = None
         self.caret: CaretBlinker | None = None
@@ -457,12 +457,24 @@ class MainWindow(Gtk.ApplicationWindow):
         self.undo_action = None
         self.redo_action = None
         self._font_size = DEFAULT_FONT_SIZE
+        self._default_align = "left"
+        self._settings_dialog: Gtk.Dialog | None = None
+        self._settings_size_spin: FontSizeEntry | None = None
+        self._settings_align_combo: Gtk.ComboBoxText | None = None
         self._wrap_enabled = True
         self._line_numbers = False
         self._highlight_line = True
         self._spell_check = True
 
         config = user_settings.load()
+        saved_size = config.get("font_size")
+        if isinstance(saved_size, int) and (
+            FontSizeEntry.MIN_SIZE <= saved_size <= FontSizeEntry.MAX_SIZE
+        ):
+            self._font_size = saved_size
+        saved_align = str(config.get("default_align") or "").strip()
+        if saved_align in {key for key, *_rest in ALIGNMENTS}:
+            self._default_align = saved_align
         saved_theme = str(config.get("theme") or "").strip().lower()
         self._theme_preference = (
             saved_theme if saved_theme in ("light", "dark") else None
@@ -661,6 +673,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._update_tab_label(tab)
         self._apply_style_scheme()
         self._select_tab(tab)
+        self._set_alignment_buttons(tab.current_align)
         return tab
 
     # ------------------------------------------- порядок и перетаскивание вкладок
@@ -1202,7 +1215,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         content.pack_start(font_buttons, False, False, 0)
 
-        self.font_size_spin = FontSizeEntry(DEFAULT_FONT_SIZE)
+        self.font_size_spin = FontSizeEntry(self._font_size)
         self.font_size_spin.set_tooltip_text("Размер шрифта")
         self.font_size_spin.connect("value-changed", self._on_font_size_changed)
         content.pack_start(self.font_size_spin, False, False, 0)
@@ -1220,7 +1233,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.SMALL_TOOLBAR)
             )
             button.set_tooltip_text(tooltip)
-            button.set_active(key == "left")
+            button.set_active(key == self._default_align)
             button.connect("toggled", self._on_alignment_toggled, key)
             content.pack_start(button, False, False, 0)
             self.align_buttons[key] = button
@@ -1312,6 +1325,8 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         menubar.append(ai_item)
 
+        menubar.append(self._item("_Настройки", "win.settings"))
+
         help_item = Gtk.MenuItem.new_with_mnemonic("_Справка")
         help_menu = Gtk.Menu()
         help_item.set_submenu(help_menu)
@@ -1366,6 +1381,7 @@ class MainWindow(Gtk.ApplicationWindow):
         entries: list[tuple[str, object, list[str] | None]] = [
             ("new", self.action_new, ["<Primary>n"]),
             ("open", self.action_open, ["<Primary>o"]),
+            ("settings", self.action_settings, []),
             ("close-tab", self.action_close_tab, ["<Primary>w"]),
             ("next-tab", self.action_next_tab, ["<Primary>Tab"]),
             ("prev-tab", self.action_prev_tab, ["<Primary><Shift>Tab"]),
@@ -1542,11 +1558,14 @@ class MainWindow(Gtk.ApplicationWindow):
         tags = tab.align_tags
         end_offset = location.get_offset()
         start_offset = end_offset - len(text)
+        # В пустом документе тегов ещё нет: новый текст наследует выравнивание
+        # по умолчанию, которое показывает панель.
+        fallback = tab.current_align if tab.current_align != "left" else None
 
         if "\n" in text:
             # Enter: помечаем сам перевод строки, чтобы следующая пустая
             # строка унаследовала выравнивание предыдущей.
-            key = self._alignment_at(buffer, tags, start_offset - 1)
+            key = self._alignment_at(buffer, tags, start_offset - 1) or fallback
             if key is not None:
                 start = buffer.get_iter_at_offset(start_offset)
                 end = buffer.get_iter_at_offset(end_offset)
@@ -1567,7 +1586,7 @@ class MainWindow(Gtk.ApplicationWindow):
             # Начало обычной строки не должно наследовать чужое выравнивание.
             return
 
-        key = self._alignment_at(buffer, tags, start_offset - 1)
+        key = self._alignment_at(buffer, tags, start_offset - 1) or fallback
         if key is None:
             return
 
@@ -1582,7 +1601,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _sync_alignment_buttons(self) -> None:
         iterator = self.buffer.get_iter_at_mark(self.buffer.get_insert())
-        current = "left"
+        # У непомеченного текста (в том числе в пустом новом документе)
+        # действует выравнивание по умолчанию из настроек.
+        current = self._default_align
         for key, tag in self._align_tags.items():
             if iterator.has_tag(tag):
                 current = key
@@ -1921,6 +1942,113 @@ class MainWindow(Gtk.ApplicationWindow):
             target=self._ai_worker, args=(tab, text, offset), daemon=True
         ).start()
         return False
+
+    # ------------------------------------------------------------- настройки
+
+    def _set_alignment_buttons(self, key: str) -> None:
+        """Показать выравнивание на панели, не меняя текст документа."""
+        self._align_guard = True
+        for other_key, button in self.align_buttons.items():
+            button.set_active(other_key == key)
+        self._align_guard = False
+
+    def _retag_alignment(self, tab: DocumentTab, key: str) -> None:
+        """Пометить весь текст вкладки выбранным выравниванием."""
+        start, end = tab.buffer.get_bounds()
+        for tag in tab.align_tags.values():
+            tab.buffer.remove_tag(tag, start, end)
+        if key != "left":
+            tab.buffer.apply_tag(tab.align_tags[key], start, end)
+        tab.current_align = key
+
+    def _apply_preferences(self, font_size: int, align: str) -> None:
+        """Применить настройки по умолчанию и сохранить их на диск."""
+        self._font_size = font_size
+        self._default_align = align
+        font = Pango.FontDescription.from_string(
+            f"{default_font_family()} {self._font_size}"
+        )
+        for tab in self._tabs:
+            tab.view.modify_font(font)
+            tab.buffer.begin_user_action()
+            try:
+                self._retag_alignment(tab, align)
+            finally:
+                tab.buffer.end_user_action()
+        self.font_size_spin.set_value(self._font_size)
+        self._set_alignment_buttons(align)
+
+        config = user_settings.load()
+        config["font_size"] = self._font_size
+        config["default_align"] = self._default_align
+        try:
+            user_settings.save(config)
+        except OSError as exc:
+            self._show_message(f"Не удалось сохранить настройки: {exc}", seconds=12)
+
+    def action_settings(self, *_args) -> None:
+        """Диалог настроек: размер шрифта и выравнивание по умолчанию."""
+        if self._settings_dialog is not None:
+            self._settings_dialog.present()
+            return
+
+        dialog = Gtk.Dialog(title="Настройки", transient_for=self, modal=True)
+        dialog.set_default_size(400, -1)
+        dialog.set_resizable(False)
+        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Сохранить", Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        self._watch_dark_titlebar(dialog)
+        self._settings_dialog = dialog
+
+        content = dialog.get_content_area()
+        content.set_border_width(18)
+        content.set_spacing(12)
+
+        grid = Gtk.Grid(column_spacing=12, row_spacing=10)
+        content.pack_start(grid, False, False, 0)
+
+        size_label = Gtk.Label(label="Размер шрифта:")
+        size_label.set_xalign(0.0)
+        grid.attach(size_label, 0, 0, 1, 1)
+        size_spin = FontSizeEntry(self._font_size)
+        size_spin.set_tooltip_text("Размер шрифта по умолчанию (8–48)")
+        grid.attach(size_spin, 1, 0, 1, 1)
+
+        align_label = Gtk.Label(label="Выравнивание:")
+        align_label.set_xalign(0.0)
+        grid.attach(align_label, 0, 1, 1, 1)
+        align_combo = Gtk.ComboBoxText()
+        for key, _icon, _justification, title in ALIGNMENTS:
+            align_combo.append(key, title)
+        for index, (key, *_rest) in enumerate(ALIGNMENTS):
+            if key == self._default_align:
+                align_combo.set_active(index)
+                break
+        grid.attach(align_combo, 1, 1, 1, 1)
+
+        hint = Gtk.Label(
+            label="Значения используются в новых документах\n"
+            "и применяются ко всем открытым вкладкам."
+        )
+        hint.set_xalign(0.0)
+        hint.get_style_context().add_class("dim-label")
+        content.pack_start(hint, False, False, 0)
+
+        self._settings_size_spin = size_spin
+        self._settings_align_combo = align_combo
+
+        def on_response(dialog: Gtk.Dialog, response: int) -> None:
+            if response == Gtk.ResponseType.OK:
+                align = str(align_combo.get_active_id() or self._default_align)
+                self._apply_preferences(int(size_spin.get_value()), align)
+            self._settings_dialog = None
+            self._settings_size_spin = None
+            self._settings_align_combo = None
+            dialog.destroy()
+
+        dialog.connect("response", on_response)
+        dialog.show_all()
 
     # ------------------------------------------------------- AI model setup
 
@@ -2912,6 +3040,7 @@ class MainWindow(Gtk.ApplicationWindow):
         try:
             tab.buffer.begin_not_undoable_action()
             tab.buffer.set_text(text)
+            self._retag_alignment(tab, self._default_align)
         finally:
             try:
                 tab.buffer.end_not_undoable_action()

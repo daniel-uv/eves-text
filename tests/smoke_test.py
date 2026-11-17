@@ -15,7 +15,7 @@ import gi  # noqa: E402
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkSource", "4")
-from gi.repository import Gio, Gtk, Gdk, GtkSource  # noqa: E402
+from gi.repository import Gio, Gtk, Gdk, GtkSource, Pango  # noqa: E402
 
 Gtk.init_check(None)
 
@@ -440,7 +440,7 @@ def test_linux_restart() -> None:
     assert captured["kwargs"]["start_new_session"] is True
 
 
-def test_window() -> None:
+def test_window() -> Application:
     app = Application()
     app.register(None)
 
@@ -681,6 +681,102 @@ def test_window() -> None:
     assert window.tab_bar.get_children()[-1] is window.new_tab_button
 
     window.destroy()
+    return app
+
+
+def test_settings(app: Application) -> None:
+    """Настройки по умолчанию загружаются, меняются в диалоге и сохраняются."""
+    from eves_text import settings as user_settings
+
+    original_load = user_settings.load
+    original_save = user_settings.save
+    saved = []
+    user_settings.load = lambda: {"font_size": 20, "default_align": "center", "theme": "light"}
+    user_settings.save = lambda data: saved.append(dict(data))
+
+    try:
+        window = MainWindow(application=app)
+        try:
+            assert window._font_size == 20
+            assert window.font_size_spin.get_value() == 20
+            assert window._default_align == "center"
+            assert window._active_tab is not None
+            assert window._active_tab.current_align == "center"
+            assert window.align_buttons["center"].get_active() is True
+            font = window.view.get_style_context().get_property(
+                "font", Gtk.StateFlags.NORMAL
+            )
+            assert font.get_size() == 20 * Pango.SCALE
+
+            # Пункт меню «Настройки» открывает диалог с текущими значениями.
+            assert window.lookup_action("settings") is not None
+            window.action_settings()
+            dialog = window._settings_dialog
+            assert dialog is not None
+            assert dialog.get_title() == "Настройки"
+            assert window._settings_size_spin is not None
+            assert window._settings_size_spin.get_value() == 20
+            assert window._settings_align_combo is not None
+            assert window._settings_align_combo.get_active_id() == "center"
+            # Повторный вызов не создаёт второй диалог.
+            window.action_settings()
+            assert window._settings_dialog is dialog
+
+            window._settings_size_spin.set_value(16)
+            window._settings_align_combo.set_active(2)  # по правому краю
+            dialog.response(Gtk.ResponseType.OK)
+
+            assert window._settings_dialog is None
+            assert window._font_size == 16
+            assert window.font_size_spin.get_value() == 16
+            assert window._default_align == "right"
+            assert window.align_buttons["right"].get_active() is True
+            assert saved, "настройки должны сохраняться"
+            assert saved[-1]["font_size"] == 16
+            assert saved[-1]["default_align"] == "right"
+            assert saved[-1]["theme"] == "light"
+
+            # Отмена не меняет значения и ничего не сохраняет.
+            before = len(saved)
+            window.action_settings()
+            window._settings_size_spin.set_value(24)
+            window._settings_align_combo.set_active(3)
+            window._settings_dialog.response(Gtk.ResponseType.CANCEL)
+            assert window._font_size == 16
+            assert window._default_align == "right"
+            assert len(saved) == before
+
+            # Новая вкладка наследует настройки, текст получает тег выравнивания.
+            window.action_new()
+            tab = window._active_tab
+            assert tab is not None
+            assert tab.current_align == "right"
+            assert window.align_buttons["right"].get_active() is True
+            window.buffer.set_text("Выравнивание по умолчанию")
+            iterator = window.buffer.get_iter_at_offset(0)
+            assert iterator.has_tag(tab.align_tags["right"])
+            font = tab.view.get_style_context().get_property(
+                "font", Gtk.StateFlags.NORMAL
+            )
+            assert font.get_size() == 16 * Pango.SCALE
+
+            # Открытый файл тоже получает выравнивание по умолчанию.
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "файл.txt"
+                path.write_text("Первая строка\nВторая строка", encoding="utf-8")
+                window.open_path(str(path))
+                opened = window._active_tab
+                assert opened is not None
+                iterator = opened.buffer.get_iter_at_offset(0)
+                assert iterator.has_tag(opened.align_tags["right"])
+                last = opened.buffer.get_end_iter()
+                last.backward_char()
+                assert last.has_tag(opened.align_tags["right"])
+        finally:
+            window.destroy()
+    finally:
+        user_settings.load = original_load
+        user_settings.save = original_save
 
 
 if __name__ == "__main__":
@@ -693,5 +789,6 @@ if __name__ == "__main__":
     test_windows_installer()
     test_linux_installer()
     test_linux_restart()
-    test_window()
+    test_app = test_window()
+    test_settings(test_app)
     print("OK: smoke test пройден")
