@@ -116,17 +116,22 @@ radiomenuitem:selected {
 }
 
 .bottom-bar button:hover {
-  background-color: alpha(currentColor, 0.12);
+  background-color: rgba(32, 33, 36, 0.12);
+}
+
+.dark-theme .bottom-bar button:hover {
+  background-color: rgba(255, 255, 255, 0.12);
 }
 
 .bottom-bar button:active,
 .bottom-bar button:checked {
-  background-color: alpha(currentColor, 0.20);
+  background-color: rgba(32, 33, 36, 0.20);
   color: #202124;
 }
 
 .dark-theme .bottom-bar button:active,
 .dark-theme .bottom-bar button:checked {
+  background-color: rgba(255, 255, 255, 0.20);
   color: #e3e3e3;
 }
 
@@ -254,11 +259,19 @@ radiomenuitem:selected {
 }
 
 .new-tab:hover {
-  background-color: alpha(@theme_fg_color, 0.12);
+  background-color: rgba(32, 33, 36, 0.12);
+}
+
+.dark-theme .new-tab:hover {
+  background-color: rgba(255, 255, 255, 0.12);
 }
 
 .new-tab:active {
-  background-color: alpha(@theme_fg_color, 0.20);
+  background-color: rgba(32, 33, 36, 0.20);
+}
+
+.dark-theme .new-tab:active {
+  background-color: rgba(255, 255, 255, 0.20);
 }
 
 .tab-close {
@@ -277,6 +290,10 @@ radiomenuitem:selected {
 }
 
 .tab-close:hover {
-  background: alpha(currentColor, 0.14);
+  background-color: rgba(32, 33, 36, 0.14);
   border-radius: 9px;
+}
+
+.dark-theme .tab-close:hover {
+  background-color: rgba(255, 255, 255, 0.14);
 }

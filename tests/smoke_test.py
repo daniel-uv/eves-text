@@ -256,6 +256,37 @@ def test_dark_scheme() -> None:
     assert "Adwaita-dark" in build
 
 
+def test_button_hover() -> None:
+    """Подсветка кнопок должна задаваться явными цветами, не currentColor."""
+    css = (ROOT / "eves_text" / "resources" / "style.css").read_text(encoding="utf-8")
+    assert "alpha(currentColor" not in css
+    assert "alpha(@theme_fg_color" not in css
+
+    def declaration(selector: str) -> str:
+        start = css.index(selector)
+        brace = css.index("{", start)
+        end = css.index("}", brace)
+        return css[brace + 1 : end]
+
+    for selector in (
+        ".bottom-bar button:hover",
+        ".bottom-bar button:active,",
+        ".new-tab:hover",
+        ".new-tab:active",
+        ".tab-close:hover",
+    ):
+        assert "rgba(" in declaration(selector), selector
+
+    for selector in (
+        ".dark-theme .bottom-bar button:hover",
+        ".dark-theme .bottom-bar button:active,",
+        ".dark-theme .new-tab:hover",
+        ".dark-theme .new-tab:active",
+        ".dark-theme .tab-close:hover",
+    ):
+        assert "rgba(255, 255, 255" in declaration(selector), selector
+
+
 def test_windows_installer() -> None:
     import ctypes
     from types import SimpleNamespace
@@ -821,6 +852,7 @@ if __name__ == "__main__":
     test_caret_blinker()
     test_app_logo()
     test_dark_scheme()
+    test_button_hover()
     test_windows_installer()
     test_linux_installer()
     test_linux_restart()
