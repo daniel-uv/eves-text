@@ -640,6 +640,10 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _create_tab(self) -> DocumentTab:
         """Создаёт новую пустую вкладку и делает её активной."""
+        # Нумерация относится к открытым документам: когда вкладок не осталось,
+        # следующий документ снова становится «Документ 1».
+        if not self._tabs:
+            self._doc_counter = 0
         self._doc_counter += 1
         tab = DocumentTab(self, self._doc_counter)
         tab.spellcheck.set_enabled(self._spell_check)

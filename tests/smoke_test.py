@@ -610,11 +610,12 @@ def test_window() -> None:
         window.action_open = original_open
     assert opened == [True]
 
-    # Кнопка «Новый документ» возвращает окно к работе; нумерация продолжается.
+    # Кнопка «Новый документ» возвращает окно к работе; после закрытия всех
+    # вкладок нумерация документов начинается заново с единицы.
     window.empty_new_button.clicked()
     assert len(window._tabs) == 1
     assert window._active_tab is not None
-    assert window._tabs[0].name_label.get_text() == "Документ 3"
+    assert window._tabs[0].name_label.get_text() == "Документ 1"
     assert window.stack.get_visible_child() is window._active_tab.scroller
     assert window.tab_strip_row.get_visible() is True
     assert window.bottom_bar.get_visible() is True
