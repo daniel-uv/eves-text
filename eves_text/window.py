@@ -251,7 +251,9 @@ class DocumentTab:
         cr.line_to(right, height - foot)
         cr.curve_to(right, height - foot + kf, width - kf, height, width, height)
         cr.line_to(0, height)
-        cr.curve_to(kf, height, 0, height - foot + kf, 0, height - foot)
+        # Левая сторона — зеркало правой: вертикальная стенка и «лапка» внизу,
+        # а не скошенная линия на всю высоту.
+        cr.curve_to(kf, height, foot, height - foot + kf, foot, height - foot)
         cr.line_to(foot, radius)
         cr.curve_to(foot, radius - kr, foot + radius - kr, 0, foot + radius, 0)
         cr.close_path()
