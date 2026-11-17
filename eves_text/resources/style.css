@@ -28,10 +28,37 @@
   border-top: 1px solid @borders;
 }
 
+/* Кнопки нижней панели плоские, как вкладки: без рамок и теней,
+   со скруглённым фоном только при наведении и нажатии. */
 .bottom-bar button {
-  min-width: 24px;
-  min-height: 22px;
-  padding: 2px 6px;
+  min-width: 26px;
+  min-height: 24px;
+  margin: 0 1px;
+  padding: 0 5px;
+  border: none;
+  border-radius: 12px;
+  background: none;
+  box-shadow: none;
+  color: #5f6368;
+}
+
+.dark-theme .bottom-bar button {
+  color: #c7c7c7;
+}
+
+.bottom-bar button:hover {
+  background-color: alpha(currentColor, 0.12);
+}
+
+.bottom-bar button:active,
+.bottom-bar button:checked {
+  background-color: alpha(currentColor, 0.20);
+  color: #202124;
+}
+
+.dark-theme .bottom-bar button:active,
+.dark-theme .bottom-bar button:checked {
+  color: #e3e3e3;
 }
 
 .bottom-bar spinbutton {
