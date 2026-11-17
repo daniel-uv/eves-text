@@ -1,3 +1,22 @@
+/* Своя строка заголовка в Linux: её цвет меняется вместе с темой. */
+window.background.csd {
+  box-shadow: none;
+}
+
+headerbar.app-titlebar {
+  min-height: 32px;
+  padding: 0 6px;
+  border: none;
+  box-shadow: none;
+  background-color: #dee1e6;
+  color: #202124;
+}
+
+.dark-theme headerbar.app-titlebar {
+  background-color: #1f2020;
+  color: #e3e3e3;
+}
+
 .statusbar {
   padding: 4px 10px;
   border-top: 1px solid @borders;

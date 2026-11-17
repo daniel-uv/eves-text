@@ -400,6 +400,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._update_version = ""
         self._update_progress_time = 0.0
         self._destroyed = False
+        self._header_bar: Gtk.HeaderBar | None = None
         self._dark_theme = (
             self._theme_preference == "dark"
             if self._theme_preference
@@ -655,7 +656,29 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ------------------------------------------------------------------ UI
 
+    def _setup_titlebar(self) -> None:
+        """Своя строка заголовка в Linux.
+
+        Cinnamon игнорирует _GTK_THEME_VARIANT и рисует рамку в цвете
+        системной темы, поэтому цвет шапки нельзя поменять через X11.
+        Собственный заголовок GTK окрашивается вместе с приложением.
+        В Windows сохраняем нативную шапку — там её цвет задаёт DWM.
+        """
+        if os.name == "nt":
+            return
+        settings = Gtk.Settings.get_default()
+        if settings is not None:
+            settings.set_property("gtk-decoration-layout", ":minimize,maximize,close")
+        bar = Gtk.HeaderBar()
+        bar.set_show_close_button(True)
+        bar.set_title(APP_NAME)
+        bar.get_style_context().add_class("app-titlebar")
+        self.set_titlebar(bar)
+        self._header_bar = bar
+
     def _build_ui(self) -> None:
+        self._setup_titlebar()
+
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.add(box)
 
@@ -2260,6 +2283,9 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_message(f"Не удалось сохранить тему: {exc}", seconds=12)
         self._sync_gtk_theme()
         self._apply_style_scheme()
+        # Для WM, которые учитывают _GTK_THEME_VARIANT, обновляем свойство
+        # после того, как GTK закончит асинхронную смену темы.
+        GLib.timeout_add(300, lambda: self._apply_titlebar_variant() or False)
 
     def _on_system_theme_changed(self, *_args) -> None:
         """Следовать системной теме, пока пользователь не выбрал свою."""
@@ -2297,6 +2323,69 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_map(self, *_args) -> None:
         self._apply_windows_titlebar()
+        self._apply_titlebar_variant()
+
+    def _apply_titlebar_variant(self, window: Gtk.Window | None = None) -> None:
+        """Сообщает WM вариант рамки окна: светлый или тёмный.
+
+        GTK выставляет _GTK_THEME_VARIANT только при создании окна. Некоторые
+        окружения учитывают обновление свойства; Cinnamon игнорирует его,
+        поэтому главное окно в Linux рисует собственную строку заголовка.
+        """
+        target = window or self
+        gdk_window = target.get_window()
+        if gdk_window is None:
+            return
+        try:
+            xid = gdk_window.get_xid()
+        except (AttributeError, TypeError):
+            return
+        if not xid:
+            return
+        try:
+            import ctypes
+
+            x11 = ctypes.CDLL("libX11.so.6")
+            x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+            x11.XOpenDisplay.restype = ctypes.c_void_p
+            x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+            x11.XInternAtom.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int
+            ]
+            x11.XInternAtom.restype = ctypes.c_ulong
+            x11.XChangeProperty.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_ulong,
+                ctypes.c_ulong,
+                ctypes.c_ulong,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_int,
+            ]
+            x11.XChangeProperty.restype = ctypes.c_int
+
+            display = x11.XOpenDisplay(None)
+            if not display:
+                return
+            try:
+                variant = x11.XInternAtom(display, b"_GTK_THEME_VARIANT", 0)
+                utf8 = x11.XInternAtom(display, b"UTF8_STRING", 0)
+                value = b"dark" if self._dark_theme else b"light"
+                x11.XChangeProperty(
+                    display,
+                    xid,
+                    variant,
+                    utf8,
+                    8,
+                    0,  # PropModeReplace
+                    value,
+                    len(value),
+                )
+            finally:
+                x11.XCloseDisplay(display)
+        except (OSError, AttributeError, TypeError, ValueError):
+            pass
 
     def _apply_windows_titlebar(self, window: Gtk.Window | None = None) -> None:
         """Красит заголовок окна в тёмный цвет на Windows 10/11."""
@@ -2311,11 +2400,15 @@ class MainWindow(Gtk.ApplicationWindow):
             win_theme.apply_dark_titlebar(handle, self._dark_theme)
 
     def _watch_dark_titlebar(self, window: Gtk.Window) -> None:
-        """Применяет тёмную шапку к диалогу после его появления."""
-        if os.name != "nt" or not isinstance(window, Gtk.Window):
+        """Применяет оформление шапки к диалогу после его появления."""
+        if not isinstance(window, Gtk.Window):
             return
         window.connect(
-            "map", lambda widget, *_: self._apply_windows_titlebar(widget)
+            "map",
+            lambda widget, *_: (
+                self._apply_windows_titlebar(widget),
+                self._apply_titlebar_variant(widget),
+            ),
         )
 
     # ------------------------------------------------------------------ text
@@ -2520,11 +2613,15 @@ class MainWindow(Gtk.ApplicationWindow):
     def _update_title(self) -> None:
         if self._active_tab is None:
             self.set_title(APP_NAME)
+            if self._header_bar is not None:
+                self._header_bar.set_title(APP_NAME)
             return
         tab = self._active_tab
         name = tab.path.name if tab.path is not None else tab.default_name
         mark = "• " if tab.buffer.get_modified() else ""
         self.set_title(f"{mark}{name} — {APP_NAME}")
+        if self._header_bar is not None:
+            self._header_bar.set_title(self.get_title())
 
     def _update_status(self) -> None:
         if self._active_tab is None:

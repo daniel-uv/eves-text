@@ -30,7 +30,7 @@
 и установите:
 
 ```bash
-sudo dpkg -i eves-text_0.6.25-1_all.deb
+sudo dpkg -i eves-text_0.6.26-1_all.deb
 eves-text
 ```
 
@@ -39,12 +39,12 @@ eves-text
 Сборка пакета:
 
 ```bash
-./packaging/build-deb.sh        # -> dist/eves-text_0.6.25-1_all.deb
+./packaging/build-deb.sh        # -> dist/eves-text_0.6.26-1_all.deb
 ```
 
 ### Windows 11
 
-В [Windows-релизе](https://github.com/daniel-uv/eves-text/releases/tag/win-v0.6.25)
+В [Windows-релизе](https://github.com/daniel-uv/eves-text/releases/tag/win-v0.6.26)
 есть установщик `.exe` и портативный `.zip`. Рантайм (Python, GTK, словари)
 уже включён — устанавливать ничего дополнительно не нужно.
 

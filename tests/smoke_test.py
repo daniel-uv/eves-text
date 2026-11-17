@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -487,6 +488,12 @@ def test_window() -> None:
     old_dark = gtk_settings.get_property("gtk-application-prefer-dark-theme")
     old_theme = gtk_settings.get_property("gtk-theme-name")
     try:
+        # В Linux заголовок рисует само приложение: его цвет следует за темой.
+        if os.name != "nt":
+            assert window._header_bar is not None
+            assert window._header_bar.get_style_context().has_class("app-titlebar")
+            assert window._header_bar.get_title() == window.get_title()
+
         action = window.lookup_action("dark-theme")
         assert action is not None
         initial = window._dark_theme
