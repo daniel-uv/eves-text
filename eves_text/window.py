@@ -184,8 +184,8 @@ class DocumentTab:
         # Отступы внутри вкладки задаём полям содержимого: Gtk.EventBox
         # не применяет CSS-padding к дочернему виджету.
         self.label_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.label_box.set_margin_start(14)
-        self.label_box.set_margin_end(12)
+        self.label_box.set_margin_start(20)
+        self.label_box.set_margin_end(18)
         self.label_box.set_margin_top(1)
         self.label_box.set_margin_bottom(1)
         self.label_box.pack_start(self.name_label, False, False, 0)
@@ -666,9 +666,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self.tab_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.tab_bar.get_style_context().add_class("tab-strip")
 
-        self.new_tab_button = Gtk.Button.new_from_icon_name(
+        plus_icon = Gtk.Image.new_from_icon_name(
             "list-add-symbolic", Gtk.IconSize.MENU
         )
+        # Видимый крест высотой 11 px — как заглавная буква в тексте вкладки.
+        plus_icon.set_pixel_size(13)
+        self.new_tab_button = Gtk.Button()
+        self.new_tab_button.set_image(plus_icon)
         self.new_tab_button.set_relief(Gtk.ReliefStyle.NONE)
         self.new_tab_button.set_tooltip_text("Новая вкладка (Ctrl+N)")
         self.new_tab_button.get_style_context().add_class("new-tab")

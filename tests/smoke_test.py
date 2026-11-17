@@ -432,9 +432,11 @@ def test_window() -> None:
     assert window.get_text() == ""
     assert second.name_label.get_text() == "Документ 2"
     # Текст внутри вкладки не прилипает к краям, справа от крестика есть зазор.
-    assert second.label_box.get_margin_start() >= 12
-    assert second.label_box.get_margin_end() >= 10
+    assert second.label_box.get_margin_start() >= 20
+    assert second.label_box.get_margin_end() >= 18
     assert second.label_box.get_spacing() >= 6
+    # Плюс высотой с заглавную букву в тексте вкладки.
+    assert window.new_tab_button.get_image().get_pixel_size() == 13
     assert second.tab.get_style_context().has_class("active")
     assert not first.tab.get_style_context().has_class("active")
     # При наведении неактивная вкладка подсвечивается и показывает крестик.
