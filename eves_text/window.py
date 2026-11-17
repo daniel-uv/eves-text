@@ -50,6 +50,10 @@ DEFAULT_FONT_SIZE = 12
 # Порог в пикселях, после которого нажатие считается перетаскиванием.
 TAB_DRAG_THRESHOLD = 6
 
+# Плавное проезжание вкладок при смене порядка.
+TAB_ANIMATION_MS = 180
+TAB_ANIMATION_STEP_MS = 16
+
 # Готовые варианты для меню «ИИ» → «Скачать модель».
 MODEL_CHOICES: tuple[tuple[str, str], ...] = (
     ("qwen2.5:7b-instruct", "qwen2.5 7B — лучшее качество (~4,7 ГБ)"),
@@ -243,6 +247,12 @@ class DocumentTab:
     def hovered(self) -> bool:
         return self._pointer_in_tab or self._pointer_in_close
 
+    def _tab_accent(self) -> tuple[float, float, float]:
+        """Цвет обводки перетаскиваемой вкладки."""
+        if getattr(self.window, "_dark_theme", False):
+            return 0x8A / 255, 0xB4 / 255, 0xF8 / 255
+        return 0x1A / 255, 0x73 / 255, 0xE8 / 255
+
     def _tab_shape(self, cr, width: float, height: float) -> None:
         """Форма вкладки Chrome: скруглённый верх и расходящиеся книзу лапки."""
         foot = height * 0.2
@@ -277,11 +287,18 @@ class DocumentTab:
             return False
 
         active = widget.get_style_context().has_class("active")
+        dragging = self.window._drag_tab is self
         active_color, hover_color, separator_color = self._tab_colors()
-        if active or self.hovered:
+        if active or self.hovered or dragging:
             self._tab_shape(cr, width, height)
             cr.set_source_rgb(*(active_color if active else hover_color))
             cr.fill()
+            if dragging:
+                # Форма вкладки остаётся прежней, только добавляется обводка:
+                # полупрозрачность делала её размытой во время перетаскивания.
+                cr.set_line_width(2.0)
+                cr.set_source_rgb(*self._tab_accent())
+                cr.stroke()
 
         # Разделитель как в Chrome: короткая скруглённая полоска между
         # неактивными вкладками. Рядом с активной вкладкой линии нет.
@@ -497,6 +514,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._drag_tab: DocumentTab | None = None
         self._drag_start_x = 0.0
         self._drag_start_y = 0.0
+        self._tab_animation: dict[str, object] | None = None
         self._dark_theme = (
             self._theme_preference == "dark"
             if self._theme_preference
@@ -655,6 +673,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _start_tab_drag(self, tab: DocumentTab, x_root: float, y_root: float) -> None:
         """Запомнить нажатие: перетаскивание начнётся после сдвига мыши."""
+        self._stop_tab_animation()
         self._drag_candidate = tab
         self._drag_start_x = float(x_root)
         self._drag_start_y = float(y_root)
@@ -680,6 +699,7 @@ class MainWindow(Gtk.ApplicationWindow):
             if widget.get_realized() and not widget.has_grab():
                 widget.grab_add()
             tab.tab.get_style_context().add_class("dragging")
+            tab.tab.queue_draw()
 
         gdk_window = self.tab_bar.get_window()
         if gdk_window is None:
@@ -698,6 +718,7 @@ class MainWindow(Gtk.ApplicationWindow):
             if widget.get_realized() and widget.has_grab():
                 widget.grab_remove()
             tab.tab.get_style_context().remove_class("dragging")
+            tab.tab.queue_draw()
         self._drag_candidate = None
         self._drag_tab = None
         return True
@@ -709,6 +730,7 @@ class MainWindow(Gtk.ApplicationWindow):
             if dragged.tab.get_realized() and dragged.tab.has_grab():
                 dragged.tab.grab_remove()
             dragged.tab.get_style_context().remove_class("dragging")
+            dragged.tab.queue_draw()
         if tab is None or self._drag_candidate is tab:
             self._drag_candidate = None
         if tab is None or self._drag_tab is tab:
@@ -730,13 +752,126 @@ class MainWindow(Gtk.ApplicationWindow):
         new_index = max(0, min(new_index, len(self._tabs) - 1))
         if new_index == old_index:
             return False
+
+        previous_order = list(self._tabs)
         self._tabs.remove(tab)
         self._tabs.insert(new_index, tab)
         self.tab_bar.reorder_child(tab.tab, new_index)
+        self._animate_tab_reorder(previous_order)
         # Разделители зависят от соседей, поэтому перерисовываем все вкладки.
         for candidate in self._tabs:
             candidate.refresh_visuals()
         return True
+
+    def _stop_tab_animation(self) -> None:
+        """Прервать скольжение вкладок, вернув их в состояния по раскладке."""
+        animation = self._tab_animation
+        if animation is None:
+            return
+        source = animation["source"]
+        if source is not None:
+            GLib.source_remove(int(source))
+        self._tab_animation = None
+        origin = self._tab_layout_origin()
+        if origin is not None:
+            for tab, target_x in self._tab_layout_x(origin[0]).items():
+                # Сбрасываем временное смещение, оставленное анимацией.
+                self._place_tab_window(tab, target_x)
+
+    def _tab_layout_origin(self) -> tuple[float, float] | None:
+        """Корневая координата первой вкладки в текущей раскладке."""
+        bar_window = self.tab_bar.get_window()
+        if bar_window is None or not self._tabs:
+            return None
+        root_x, root_y = bar_window.get_root_coords(0, 0)
+        # После reorder_child GTK ещё не пересчитал раскладку: у первой вкладки
+        # в списке может остаться старый x. Минимальный x и есть начало полосы.
+        start_x = min(tab.tab.get_allocation().x for tab in self._tabs)
+        return float(root_x + start_x), float(root_y)
+
+    def _tab_layout_x(self, origin: float) -> dict[DocumentTab, float]:
+        """Куда вкладки должны встать после завершения перестановки."""
+        positions: dict[DocumentTab, float] = {}
+        x = origin
+        for candidate in self._tabs:
+            positions[candidate] = x
+            x += candidate.tab.get_allocated_width()
+        return positions
+
+    def _place_tab_window(self, tab: DocumentTab, desired_x: float | None) -> None:
+        """Сместить GDK-окно вкладки относительно её места в раскладке."""
+        window = tab.tab.get_window()
+        if window is None:
+            return
+        current_x, _ = window.get_root_coords(0, 0)
+        rel_x, rel_y = window.get_position()
+        if desired_x is None:
+            offset = 0.0
+        else:
+            offset = desired_x - current_x
+        if abs(offset) >= 1.0:
+            window.move(rel_x + int(offset), rel_y)
+
+    def _animate_tab_reorder(self, previous_order: list[DocumentTab]) -> None:
+        """Плавно сдвинуть вкладки из старых позиций в новые."""
+        # Сначала фиксируем то, где вкладки видны сейчас: при прерванной
+        # анимации это промежуточные позиции, а не позиции из раскладки.
+        start_positions: dict[DocumentTab, float] = {}
+        for tab in previous_order:
+            window = tab.tab.get_window()
+            if window is not None:
+                start_positions[tab] = float(window.get_root_coords(0, 0)[0])
+
+        self._stop_tab_animation()
+        origin = self._tab_layout_origin()
+        if origin is None:
+            return
+        targets = self._tab_layout_x(origin[0])
+        frames: list[tuple[DocumentTab, float, float]] = []
+        for tab, start_x in start_positions.items():
+            if tab in targets and abs(start_x - targets[tab]) >= 1.0:
+                frames.append((tab, start_x, targets[tab]))
+        if not frames:
+            return
+        self._tab_animation = {
+            "source": None,
+            "start": time.monotonic(),
+            "frames": frames,
+            "positions": {},
+        }
+        source = GLib.timeout_add(TAB_ANIMATION_STEP_MS, self._animate_tab_step)
+        self._tab_animation["source"] = source
+        # GTK переложит вкладки в новые места уже в следующем кадре. Сразу
+        # вернём их на старые позиции, чтобы не было рывка перед анимацией.
+        self._animate_tab_step()
+
+    def _animate_tab_step(self) -> bool:
+        animation = self._tab_animation
+        if animation is None:
+            return False
+
+        elapsed_ms = (time.monotonic() - float(animation["start"])) * 1000
+        progress = min(1.0, elapsed_ms / TAB_ANIMATION_MS)
+        eased = progress * progress * (3.0 - 2.0 * progress)
+        positions = animation["positions"]  # type: ignore[assignment]
+        for tab, start_x, target_x in animation["frames"]:  # type: ignore[misc]
+            desired = target_x + (start_x - target_x) * (1.0 - eased)
+            positions[tab] = desired  # type: ignore[index]
+            self._place_tab_window(tab, desired)
+        if progress >= 1.0:
+            self._tab_animation = None
+            return False
+        return True
+
+    def _on_tab_size_allocate(self, tab: DocumentTab) -> None:
+        """Не дать GTK переложить вкладку в новый ряд посреди анимации."""
+        animation = self._tab_animation
+        if animation is None:
+            return
+        positions = animation["positions"]  # type: ignore[assignment]
+        desired = positions.get(tab)  # type: ignore[union-attr]
+        if desired is not None:
+            self._place_tab_window(tab, float(desired))
 
     def _tab_for_buffer(self, buffer: Gtk.TextBuffer) -> DocumentTab | None:
         for tab in self._tabs:
@@ -746,6 +881,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _connect_tab(self, tab: DocumentTab) -> None:
         """Сигналы буфера и вида одной вкладки."""
+        tab.tab.connect("size-allocate", lambda *_: self._on_tab_size_allocate(tab))
         tab.buffer.connect(
             "notify::cursor-position",
             lambda *_: self._on_tab_cursor(tab),
@@ -821,6 +957,7 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
 
         index = self._tabs.index(tab)
+        self._stop_tab_animation()
         self._cancel_tab_drag(tab)
         if tab.caret is not None:
             tab.caret.stop()
@@ -2892,6 +3029,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_destroy(self, *_args) -> None:
         """Останавливает скачивание и отдельную службу при закрытии окна."""
         self._destroyed = True
+        self._stop_tab_animation()
         self._cancel_tab_drag()
         for tab in self._tabs:
             if tab.caret is not None:

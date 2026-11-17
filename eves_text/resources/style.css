@@ -176,11 +176,6 @@ radiomenuitem:selected {
   color: #202124;
 }
 
-/* Перетаскиваемая вкладка чуть прозрачнее остальных. */
-.doc-tab.dragging {
-  opacity: 0.7;
-}
-
 .dark-theme .doc-tab label {
   color: #c7c7c7;
 }

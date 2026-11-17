@@ -537,7 +537,7 @@ def test_window() -> None:
         window.new_tab_button,
     ]
 
-    # Отпускание мыши завершает перетаскивание и снимает прозрачность.
+    # Отпускание мыши завершает перетаскивание и снимает обводку вкладки.
     release = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
     release.button = 1
     assert second.tab.emit("button-release-event", release) is False
