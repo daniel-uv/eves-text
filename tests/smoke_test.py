@@ -597,24 +597,29 @@ def test_window() -> Application:
     # Нажатие сделало вкладку активной — вернём вторую для следующих проверок.
     window._select_tab(second)
 
-    # Подсветка кнопок не зависит от псевдокласса :hover: проверяем, что
+    # Подсветка пунктов верхнего меню не зависит от псевдокласса :hover:
     # обработчики наведения ставят и снимают аварийный CSS-класс.
     from eves_text.window import DEFAULT_FONT_SIZE, HOVER_CLASS, FontSizeEntry
 
+    menu_items = window.menubar.get_children()
+    assert len(menu_items) == 6
     enter = Gdk.Event.new(Gdk.EventType.ENTER_NOTIFY)
     leave = Gdk.Event.new(Gdk.EventType.LEAVE_NOTIFY)
-    for button in (
-        window.font_larger,
-        window.font_smaller,
-        window.align_buttons["left"],
-        window.ai_button,
-        window.new_tab_button,
-        window._active_tab.close_button,
-    ):
-        button.emit("enter-notify-event", enter)
-        assert button.get_style_context().has_class(HOVER_CLASS)
-        button.emit("leave-notify-event", leave)
-        assert not button.get_style_context().has_class(HOVER_CLASS)
+    for item in menu_items:
+        item.emit("enter-notify-event", enter)
+        assert item.get_style_context().has_class(HOVER_CLASS)
+        item.emit("leave-notify-event", leave)
+        assert not item.get_style_context().has_class(HOVER_CLASS)
+
+    # У крестика вкладки нет отдельной ручной подсветки: иначе получается
+    # двойное выделение поверх обычного :hover.
+    close = window._active_tab.close_button
+    close.emit("enter-notify-event", enter)
+    assert not close.get_style_context().has_class(HOVER_CLASS)
+    root = Path(__file__).parent.parent
+    css = (root / "eves_text/resources/style.css").read_text()
+    assert ".tab-close.force-hover" not in css
+    assert "_close_hover_rgba" not in (root / "eves_text/window.py").read_text()
 
     # У размера шрифта нет встроенных стрелок, которые проявлялись при нажатии
     # и дублировали кнопки «−» и «+». Работают только видимые кнопки и ввод.

@@ -35,6 +35,24 @@ radiomenuitem:selected {
   color: #202124;
 }
 
+/* Пункты верхнего меню подсвечиваются при наведении. Класс force-hover
+   нужен для сборок, где GTK3 не переводит меню в состояние PRELIGHT. */
+menubar menuitem:hover,
+menubar menuitem:selected,
+menubar menuitem.force-hover {
+  background-color: #e8eaed;
+  background-image: none;
+  color: #202124;
+}
+
+.dark-theme menubar menuitem:hover,
+.dark-theme menubar menuitem:selected,
+.dark-theme menubar menuitem.force-hover {
+  background-color: #3a3a3a;
+  background-image: none;
+  color: #ffffff;
+}
+
 /* В Windows GTK-тема может остаться светлой: красим полосы сами,
    чтобы тёмная тема применялась и к меню, и к нижним панелям. */
 
@@ -87,8 +105,7 @@ radiomenuitem:selected {
   opacity: 0.7;
 }
 
-.version-button:hover,
-.version-button.force-hover {
+.version-button:hover {
   opacity: 1;
   text-decoration: underline;
 }
@@ -116,13 +133,11 @@ radiomenuitem:selected {
   color: #c7c7c7;
 }
 
-.bottom-bar button:hover,
-.bottom-bar button.force-hover {
+.bottom-bar button:hover {
   background-color: rgba(32, 33, 36, 0.12);
 }
 
-.dark-theme .bottom-bar button:hover,
-.dark-theme .bottom-bar button.force-hover {
+.dark-theme .bottom-bar button:hover {
   background-color: rgba(255, 255, 255, 0.12);
 }
 
@@ -208,13 +223,11 @@ radiomenuitem:selected {
   color: #e3e3e3;
 }
 
-.empty-state button:hover,
-.empty-state button.force-hover {
+.empty-state button:hover {
   background-color: #f1f3f4;
 }
 
-.dark-theme .empty-state button:hover,
-.dark-theme .empty-state button.force-hover {
+.dark-theme .empty-state button:hover {
   background-color: #3c4043;
 }
 
@@ -263,13 +276,11 @@ radiomenuitem:selected {
   color: #c7c7c7;
 }
 
-.new-tab:hover,
-.new-tab.force-hover {
+.new-tab:hover {
   background-color: rgba(32, 33, 36, 0.12);
 }
 
-.dark-theme .new-tab:hover,
-.dark-theme .new-tab.force-hover {
+.dark-theme .new-tab:hover {
   background-color: rgba(255, 255, 255, 0.12);
 }
 
@@ -296,13 +307,11 @@ radiomenuitem:selected {
   color: #e3e3e3;
 }
 
-.tab-close:hover,
-.tab-close.force-hover {
+.tab-close:hover {
   background-color: rgba(32, 33, 36, 0.14);
   border-radius: 9px;
 }
 
-.dark-theme .tab-close:hover,
-.dark-theme .tab-close.force-hover {
+.dark-theme .tab-close:hover {
   background-color: rgba(255, 255, 255, 0.14);
 }

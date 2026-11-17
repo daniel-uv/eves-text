@@ -214,7 +214,6 @@ class DocumentTab:
         close.set_focus_on_click(False)
         close.set_tooltip_text("Закрыть вкладку")
         close.get_style_context().add_class("tab-close")
-        install_hover(close)
         close.connect("clicked", lambda *_: window.close_tab(self))
         self.close_button = close
 
@@ -309,11 +308,6 @@ class DocumentTab:
         cr.curve_to(foot, radius - kr, foot + radius - kr, 0, foot + radius, 0)
         cr.close_path()
 
-    def _close_hover_rgba(self) -> tuple[float, float, float, float]:
-        if getattr(self.window, "_dark_theme", False):
-            return (1.0, 1.0, 1.0, 0.14)
-        return (32 / 255, 33 / 255, 36 / 255, 0.14)
-
     def _draw_tab(self, widget, cr) -> bool:
         width = widget.get_allocated_width()
         height = widget.get_allocated_height()
@@ -338,18 +332,6 @@ class DocumentTab:
                 cr.set_line_width(2.0)
                 cr.set_source_rgb(*self._tab_accent())
                 cr.stroke()
-
-        # Крестик сидит внутри EventBox, и GTK не всегда рисует ему фон из CSS.
-        # Рисуем подсветку сами поверх заливки вкладки, но под самой иконкой.
-        if self._pointer_in_close:
-            area = self.close_button.get_allocation()
-            x = area.x + area.width / 2
-            y = area.y + area.height / 2
-            radius = min(area.width, area.height) / 2
-            cr.new_path()
-            cr.arc(x, y, radius, 0, 2 * 3.141592653589793)
-            cr.set_source_rgba(*self._close_hover_rgba())
-            cr.fill()
         return False
 
     def _update_close_visibility(self) -> None:
@@ -1151,7 +1133,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self.new_tab_button.set_relief(Gtk.ReliefStyle.NONE)
         self.new_tab_button.set_tooltip_text("Новая вкладка (Ctrl+N)")
         self.new_tab_button.get_style_context().add_class("new-tab")
-        install_hover(self.new_tab_button)
         self.new_tab_button.connect("clicked", lambda *_: self.action_new())
         self.tab_bar.pack_start(self.new_tab_button, False, False, 0)
 
@@ -1220,7 +1201,6 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         self.empty_new_button.set_always_show_image(True)
         self.empty_new_button.get_style_context().add_class("empty-state-button")
-        install_hover(self.empty_new_button)
         self.empty_new_button.connect("clicked", lambda *_: self.action_new())
 
         self.empty_open_button = Gtk.Button(label="Открыть существующий")
@@ -1231,7 +1211,6 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         self.empty_open_button.set_always_show_image(True)
         self.empty_open_button.get_style_context().add_class("empty-state-button")
-        install_hover(self.empty_open_button)
         self.empty_open_button.connect("clicked", lambda *_: self.action_open())
 
         buttons.pack_start(self.empty_new_button, False, False, 0)
@@ -1282,7 +1261,6 @@ class MainWindow(Gtk.ApplicationWindow):
             )
             button.set_tooltip_text(tooltip)
             button.set_active(key == self._default_align)
-            install_hover(button)
             button.connect("toggled", self._on_alignment_toggled, key)
             content.pack_start(button, False, False, 0)
             self.align_buttons[key] = button
@@ -1293,7 +1271,6 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self.ai_button = Gtk.Button(label="Выключить ИИ")
         self.ai_button.set_relief(Gtk.ReliefStyle.NONE)
-        install_hover(self.ai_button)
         self.ai_button.connect("clicked", lambda *_: self._toggle_ai())
         content.pack_start(self.ai_button, False, False, 0)
         self._update_ai_button()
@@ -1307,10 +1284,11 @@ class MainWindow(Gtk.ApplicationWindow):
         button.set_relief(Gtk.ReliefStyle.NONE)
         button.set_image(Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.SMALL_TOOLBAR))
         button.set_tooltip_text(tooltip)
-        return install_hover(button)
+        return button
 
     def _build_menubar(self) -> Gtk.MenuBar:
         menubar = Gtk.MenuBar()
+        self.menubar = menubar
 
         file_item = Gtk.MenuItem.new_with_mnemonic("_Файл")
         file_menu = Gtk.Menu()
@@ -1326,6 +1304,7 @@ class MainWindow(Gtk.ApplicationWindow):
         file_menu.append(self._item("Сохранить _как…", "win.save-as"))
         file_menu.append(Gtk.SeparatorMenuItem())
         file_menu.append(self._item("_Выход", "win.quit"))
+        install_hover(file_item)
         menubar.append(file_item)
 
         edit_item = Gtk.MenuItem.new_with_mnemonic("_Правка")
@@ -1342,6 +1321,7 @@ class MainWindow(Gtk.ApplicationWindow):
         edit_menu.append(self._item("_Удалить", "win.delete"))
         edit_menu.append(Gtk.SeparatorMenuItem())
         edit_menu.append(self._item("Выделить _всё", "win.select-all"))
+        install_hover(edit_item)
         menubar.append(edit_item)
 
         view_item = Gtk.MenuItem.new_with_mnemonic("_Вид")
@@ -1357,6 +1337,7 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         view_menu.append(Gtk.SeparatorMenuItem())
         view_menu.append(self._check_item("_Тёмная тема", "win.dark-theme"))
+        install_hover(view_item)
         menubar.append(view_item)
 
         ai_item = Gtk.MenuItem.new_with_mnemonic("_ИИ")
@@ -1373,12 +1354,14 @@ class MainWindow(Gtk.ApplicationWindow):
         ai_menu.append(
             self._item("Использовать системную Ollama", "win.ai-system")
         )
+        install_hover(ai_item)
         menubar.append(ai_item)
 
         # Пункт верхнего уровня без подменю в GTK активируется только со
         # второго клика: обрабатываем первое нажатие сами.
         settings_item = self._item("_Настройки", "win.settings")
         settings_item.connect("button-press-event", self._on_settings_pressed)
+        install_hover(settings_item)
         menubar.append(settings_item)
 
         help_item = Gtk.MenuItem.new_with_mnemonic("_Справка")
@@ -1387,6 +1370,7 @@ class MainWindow(Gtk.ApplicationWindow):
         about = Gtk.MenuItem.new_with_mnemonic("О _программе")
         about.connect("activate", self._on_about)
         help_menu.append(about)
+        install_hover(help_item)
         menubar.append(help_item)
 
         return menubar
@@ -1432,7 +1416,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self.version_button.set_relief(Gtk.ReliefStyle.NONE)
         self.version_button.set_tooltip_text("Проверить обновления")
         self.version_button.get_style_context().add_class("version-button")
-        install_hover(self.version_button)
         self.version_button.connect("clicked", self.action_check_updates)
         bar.pack_end(self.version_button, False, False, 0)
         return bar
