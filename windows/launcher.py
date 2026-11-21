@@ -114,6 +114,29 @@ def configure_enchant(base: Path) -> None:
         pass
 
 
+APP_USER_MODEL_ID = "DanielUsov.EvesText"
+
+
+def set_app_user_model_id() -> None:
+    """Привязать окно GTK (процесс pythonw.exe) к AUMID приложения.
+
+    Нативный лаунчер задаёт AUMID только себе, а окно принадлежит дочернему
+    процессу. Без вызова здесь Windows группирует окно с pythonw.exe и
+    показывает системную иконку вместо иконки Eve's Text.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        set_id = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+        set_id.argtypes = [ctypes.c_wchar_p]
+        set_id.restype = None
+        set_id(APP_USER_MODEL_ID)
+    except Exception:  # noqa: BLE001 - на старых Windows функции может не быть
+        pass
+
+
 def configure(base: Path) -> None:
     """Прописать пути бандла в переменные окружения GTK/GLib."""
     bin_dir = base / "bin"
@@ -189,6 +212,7 @@ def run(base: Path) -> int:
 
 def main() -> int:
     base = base_dir()
+    set_app_user_model_id()
     try:
         return run(base)
     except SystemExit:

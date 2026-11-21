@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import gi
 
@@ -53,6 +55,19 @@ ITALIC_TAG = "format-italic"
 UNDERLINE_TAG = "format-underline"
 SIZE_TAG_PREFIX = "format-size:"
 TEXT_FORMAT_KEYS = ("bold", "italic", "underline")
+
+# Явные цели для перетаскивания файлов. Разные info позволяют понять,
+# что именно прислал источник: URI-список или обычный текст с путём.
+# Значения выше внутренних TARGET_* у GtkTextView, чтобы не пересечься
+# с его собственным обработчиком вставки текста.
+DND_URI_LIST = 100
+DND_UTF8_STRING = 101
+DND_TEXT_PLAIN = 102
+DND_TARGETS: tuple[tuple[str, int], ...] = (
+    ("text/uri-list", DND_URI_LIST),
+    ("UTF8_STRING", DND_UTF8_STRING),
+    ("text/plain", DND_TEXT_PLAIN),
+)
 
 # Класс, который ставим на кнопку вручную: в GTK3 псевдокласс :hover
 # не всегда применяется (например, в Windows-бандле), поэтому подсветку
@@ -1769,11 +1784,46 @@ class MainWindow(Gtk.ApplicationWindow):
     # -------------------------------------------------------------- signals
 
     def _setup_drop_target(self, widget: Gtk.Widget) -> None:
-        """Разрешить бросать файлы на окно, поле ввода и его прокрутку."""
-        widget.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
-        widget.drag_dest_add_uri_targets()
-        widget.drag_dest_add_text_targets()
+        """Разрешить бросать файлы на окно, поле ввода и его прокрутку.
+
+        В Windows проводник предлагает перетаскивание как Move и отдаёт
+        путь файла не только как URI, но и как обычный текст. Поэтому цели
+        задаём явно и действия не ограничиваем только Copy. Завершение
+        перетаскивания делаем сами — без GTK_DEST_DEFAULT_DROP, чтобы один
+        бросок не обрабатывался дважды.
+        """
+        # Без флагов OTHER_APP/SAME_APP: в Windows источником считается
+        # корневое окно, и проверка «другое приложение» может не пройти.
+        targets = [
+            Gtk.TargetEntry.new(name, Gtk.TargetFlags(0), info)
+            for name, info in DND_TARGETS
+        ]
+        widget.drag_dest_set(
+            Gtk.DestDefaults.MOTION | Gtk.DestDefaults.HIGHLIGHT,
+            targets,
+            Gdk.DragAction.COPY | Gdk.DragAction.MOVE | Gdk.DragAction.LINK,
+        )
+        # Даже если GDK Win32 не показал цели источника, всё равно получаем
+        # drag-motion и отвечаем COPY — иначе бросок отклоняется.
+        widget.drag_dest_set_track_motion(True)
+        widget.connect("drag-motion", self._on_drag_motion)
+        widget.connect("drag-drop", self._on_drag_drop)
         widget.connect("drag-data-received", self._on_drag_data)
+
+    def _on_drag_motion(self, _widget, context, _x, _y, time) -> bool:
+        """Принять бросок как копирование — курсор не должен быть «запрет»."""
+        Gdk.drag_status(context, Gdk.DragAction.COPY, time)
+        return True
+
+    def _on_drag_drop(self, widget, context, _x, _y, time) -> bool:
+        """Запросить данные броска у источника."""
+        target = widget.drag_dest_find_target(context, None)
+        if target is None:
+            # GDK Win32 не всегда сообщает цели проводника. Явно запрашиваем
+            # URI-список — именно в нём приходит файл из Проводника.
+            target = Gdk.atom_intern(DND_TARGETS[0][0], False)
+        widget.drag_get_data(context, target, time)
+        return True
 
     def _connect_signals(self) -> None:
         self.connect("delete-event", self._on_delete_event)
@@ -3261,7 +3311,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ------------------------------------------------------------------ files
 
-    def open_path(self, path: str | Path) -> None:
+    def open_path(self, path: str | Path, *, new_tab: bool = False) -> None:
         path = Path(path)
         try:
             text, encoding, spans = document.read_document(path)
@@ -3269,9 +3319,9 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_error("Не удалось открыть файл", str(exc))
             return
 
-        # Пустой лист без изменений можно занять открытым файлом,
-        # иначе файл получает собственную вкладку.
-        tab = self._pristine_tab()
+        # Обычное открытие занимает пустой лист, а брошенный файл всегда
+        # получает собственную вкладку — даже если текущая не изменена.
+        tab = None if new_tab else self._pristine_tab()
         if tab is None:
             tab = self._create_tab()
         self._load_tab_text(tab, text, path, encoding, spans)
@@ -3369,15 +3419,22 @@ class MainWindow(Gtk.ApplicationWindow):
 
     @staticmethod
     def _add_filters(dialog: Gtk.FileChooserNative) -> None:
+        # GtkFileChooserNative на Windows показывает штатный IFileDialog только
+        # если все фильтры описываются расширениями. MIME-правила заставляют его
+        # откатиться к GTK-диалогу с неподходящей цветовой темой.
+        use_mime = os.name != "nt"
+
         rtf_filter = Gtk.FileFilter()
         rtf_filter.set_name("Форматированный текст (RTF)")
-        rtf_filter.add_mime_type("application/rtf")
+        if use_mime:
+            rtf_filter.add_mime_type("application/rtf")
         rtf_filter.add_pattern("*.rtf")
         dialog.add_filter(rtf_filter)
 
         text_filter = Gtk.FileFilter()
         text_filter.set_name("Текстовые файлы")
-        text_filter.add_mime_type("text/plain")
+        if use_mime:
+            text_filter.add_mime_type("text/plain")
         text_filter.add_pattern("*.txt")
         text_filter.add_pattern("*.md")
         dialog.add_filter(text_filter)
@@ -3700,38 +3757,98 @@ class MainWindow(Gtk.ApplicationWindow):
             self._ai_pull_cancel.set()
         self._managed_ollama.stop()
 
+    @staticmethod
+    def _dropped_paths(raw: str) -> list[Path]:
+        """Разобрать URI-список или текст с путями из данных броска."""
+        paths: list[Path] = []
+        for line in raw.replace("\x00", "\n").splitlines():
+            value = line.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            if not value:
+                continue
+            if value.startswith("file://"):
+                try:
+                    path, _hostname = GLib.filename_from_uri(value)
+                except Exception:  # noqa: BLE001
+                    path = unquote(urlparse(value).path)
+            else:
+                path = unquote(value)
+            # Проводник иногда отдаёт URI без хоста: file:///C:/... → /C:/...
+            if re.match(r"^/[A-Za-z]:/", path):
+                path = path[1:]
+            if path:
+                paths.append(Path(path))
+        return paths
+
     def _open_dropped_uris(self, uris: list[str]) -> bool:
         """Открыть файлы, брошенные в окно. Возвращает True, если открыли."""
-        opened = False
+        candidates: list[str] = []
         for uri in uris:
-            try:
-                gfile = Gio.File.new_for_uri(uri)
-                path = gfile.get_path()
-            except Exception:  # noqa: BLE001
+            if not uri:
                 continue
-            if path and Path(path).is_file():
-                self.open_path(Path(path))
-                opened = True
+            candidates.append(uri)
+            try:
+                path = Gio.File.new_for_uri(uri).get_path()
+            except Exception:  # noqa: BLE001
+                path = None
+            if path:
+                candidates.append(path)
+
+        opened = False
+        seen: set[Path] = set()
+        for path in self._dropped_paths("\n".join(candidates)):
+            try:
+                resolved = path.expanduser().resolve()
+            except OSError:
+                continue
+            if resolved in seen or not resolved.is_file():
+                continue
+            seen.add(resolved)
+            self.open_path(resolved, new_tab=True)
+            opened = True
         return opened
 
+    def _dropped_text(self, data, info: int) -> str:
+        """Достать текст из данных броска: через API или из сырых байтов."""
+        if info == DND_URI_LIST:
+            try:
+                uris = data.get_uris() or []
+            except Exception:  # noqa: BLE001
+                uris = []
+            if uris:
+                return "\n".join(uris)
+        try:
+            raw = data.get_data()
+        except Exception:  # noqa: BLE001
+            raw = b""
+        if raw:
+            encodings = ["utf-8"]
+            if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+                encodings.insert(0, "utf-16")
+            encodings.append("cp1251")
+            for encoding in encodings:
+                try:
+                    return raw.decode(encoding)
+                except UnicodeDecodeError:
+                    continue
+        try:
+            return data.get_text() or ""
+        except Exception:  # noqa: BLE001
+            return ""
+
     def _on_drag_data(self, widget, context, x, y, data, info, time) -> bool:
-        uris = data.get_uris() or []
-        handled = self._open_dropped_uris(uris)
-        if not handled:
-            # Некоторые менеджеры файлов дают только текст с путём.
-            text = data.get_text() or ""
-            candidate = text.strip()
-            if candidate.startswith("file://"):
-                handled = self._open_dropped_uris([candidate])
-            elif candidate and Path(candidate).is_file():
-                self.open_path(Path(candidate))
-                handled = True
-            elif text and isinstance(widget, Gtk.TextView):
-                # Обычный текст, брошенный в поле ввода, вставляем как есть.
-                buffer = widget.get_buffer()
-                position = buffer.get_iter_at_location(x, y)[1]
-                buffer.insert_interactive(position, text, True)
-                handled = True
+        text = self._dropped_text(data, info)
+        handled = self._open_dropped_uris(text.splitlines()) if text else False
+        if not handled and info != DND_URI_LIST and isinstance(widget, Gtk.TextView):
+            # Обычный текст, брошенный в поле ввода, вставляем как есть.
+            buffer = widget.get_buffer()
+            position = buffer.get_end_iter()
+            success, found = buffer.get_iter_at_location(x, y)
+            if success:
+                position = found
+            buffer.insert_interactive(position, text, True)
+            handled = True
         Gtk.drag_finish(context, handled, False, time)
         # Событие не должно уйти родительскому виджету: иначе один и тот же
         # файл откроется дважды — с поля ввода и сразу с окна.

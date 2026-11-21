@@ -7,6 +7,8 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -394,17 +396,38 @@ def test_windows_installer() -> None:
     assert ".txt" in iss and ".rtf" in iss
     assert "OpenWithProgids" in iss
     assert "AppUserModelID" in iss
+    assert "ApplicationIcon" in iss
     assert 'Filename: "{app}\\bin\\pythonw.exe"' not in iss
 
     launcher_c = (ROOT / "windows" / "launcher.c").read_text(encoding="utf-8")
     assert "wWinMain" in launcher_c
     assert "CreateProcessW" in launcher_c
     assert "SetCurrentProcessExplicitAppUserModelID" in launcher_c
+
+    # Окно GTK принадлежит дочернему pythonw.exe: AUMID должен задаваться
+    # и там, иначе Windows показывает системную иконку и группирует окно
+    # вместе с pythonw.exe.
+    launcher_py = (ROOT / "windows" / "launcher.py").read_text(encoding="utf-8")
+    assert "set_app_user_model_id" in launcher_py
+    assert "SetCurrentProcessExplicitAppUserModelID" in launcher_py
+
+    # Иконка должна быть встроена в сам .exe, а не только лежать рядом.
+    rc = (ROOT / "windows" / "launcher.rc").read_text(encoding="utf-8")
+    assert '1 ICON "assets\\\\eves-text.ico"' in rc
+    assert "VERSIONINFO" in rc
+
     build = (ROOT / "windows" / "build-portable.sh").read_text(encoding="utf-8")
     assert "launcher.c" in build and "Eve's Text.exe" in build
     assert "-mwindows" in build
+    assert "windres" in build and "launcher.rc" in build
+    assert (ROOT / "windows" / "assets" / "eves-text.ico").is_file()
+
+    check_icon = (ROOT / "windows" / "check_icon.py").read_text(encoding="utf-8")
+    assert "RT_GROUP_ICON" in check_icon and "RT_ICON" in check_icon
+
     ci = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
     assert "mingw-w64-ucrt-x86_64-gcc" in ci
+    assert "check_icon.py" in ci
 
 
 def test_linux_installer() -> None:
@@ -971,6 +994,127 @@ def test_formatting(app: Application) -> None:
         user_settings.save = original_save
 
 
+def test_native_file_dialog_filters() -> None:
+    """В Windows фильтры только по расширениям — иначе GTK не вызовет IFileDialog."""
+
+    class FakeChooser:
+        def __init__(self) -> None:
+            self.filters: list[Gtk.FileFilter] = []
+
+        def add_filter(self, file_filter: Gtk.FileFilter) -> None:
+            self.filters.append(file_filter)
+
+    from eves_text import window as window_module
+
+    # Windows: ни одного MIME-правила, все фильтры по расширениям.
+    with (
+        mock.patch.object(window_module, "os", SimpleNamespace(name="nt")),
+        mock.patch.object(Gtk.FileFilter, "add_mime_type") as add_mime,
+    ):
+        chooser = FakeChooser()
+        MainWindow._add_filters(chooser)  # type: ignore[arg-type]
+    assert add_mime.call_count == 0
+    assert [f.get_name() for f in chooser.filters] == [
+        "Форматированный текст (RTF)",
+        "Текстовые файлы",
+        "Все файлы",
+    ]
+
+    # Linux: MIME-правила оставляем — нативный диалог там через портал.
+    with mock.patch.object(Gtk.FileFilter, "add_mime_type") as add_mime:
+        MainWindow._add_filters(FakeChooser())  # type: ignore[arg-type]
+    assert add_mime.call_count == 2
+
+
+def test_drag_and_drop(app: Application) -> None:
+    """Бросок .txt открывает файл в новой вкладке — в любом формате данных."""
+    from eves_text import settings as user_settings
+    from eves_text.window import DND_TEXT_PLAIN, DND_URI_LIST
+
+    class FakeSelectionData:
+        """Имитация Gtk.SelectionData без реального X11/Win32-события."""
+
+        def __init__(self, raw: bytes) -> None:
+            self.raw = raw
+
+        def get_uris(self) -> list[str]:
+            return []
+
+        def get_data(self) -> bytes:
+            return self.raw
+
+        def get_text(self) -> str:
+            return ""
+
+    original_load = user_settings.load
+    original_save = user_settings.save
+    user_settings.load = lambda: {}
+    user_settings.save = lambda data: None
+
+    try:
+        window = MainWindow(application=app)
+        try:
+            first = window._active_tab
+            assert first is not None
+            assert first.is_pristine()
+
+            with tempfile.TemporaryDirectory() as tmp:
+                one = Path(tmp) / "первый.txt"
+                two = Path(tmp) / "второй.txt"
+                one.write_text("Содержимое первого", encoding="utf-8")
+                two.write_text("Содержимое второго", encoding="utf-8")
+                uri_one = Gio.File.new_for_path(str(one)).get_uri()
+                uri_two = Gio.File.new_for_path(str(two)).get_uri()
+
+                # Проводник отдаёт URI-список сырыми байтами с \r\n и \x00.
+                raw = f"{uri_one}\r\n{uri_two}\r\n\x00".encode("utf-8")
+                with mock.patch.object(Gtk, "drag_finish") as finish:
+                    handled = window._on_drag_data(
+                        window._active_tab.view, None, 0, 0,
+                        FakeSelectionData(raw), DND_URI_LIST, 0,
+                    )
+                assert handled is True
+                assert finish.call_count == 1
+                assert len(window._tabs) == 3
+                assert window.get_text() == "Содержимое второго"
+                assert first.is_pristine(), "чистая вкладка не должна заняться файлом"
+
+                # Даже если активна нетронутая вкладка, файл идёт в новую.
+                window.action_new()
+                clean = window._active_tab
+                assert clean is not None and clean.is_pristine()
+                with mock.patch.object(Gtk, "drag_finish"):
+                    window._on_drag_data(
+                        window._active_tab.view, None, 0, 0,
+                        FakeSelectionData(uri_one.encode("utf-8")),
+                        DND_URI_LIST, 0,
+                    )
+                assert len(window._tabs) == 5
+                assert clean.is_pristine()
+                assert window.get_text() == "Содержимое первого"
+
+                # GDK Win32 иногда даёт обычный текст с путём вместо URI.
+                with mock.patch.object(Gtk, "drag_finish"):
+                    window._on_drag_data(
+                        window._active_tab.view, None, 0, 0,
+                        FakeSelectionData(str(two).encode("utf-8")),
+                        DND_TEXT_PLAIN, 0,
+                    )
+                assert len(window._tabs) == 6
+                assert window.get_text() == "Содержимое второго"
+
+            # Пути Windows без хоста: file:///C:/... и /C:/...
+            parsed = MainWindow._dropped_paths(
+                "file:///C:/Users/Jean/a.txt\n/C:/Users/Jean/b.txt"
+            )
+            assert parsed == [Path("C:/Users/Jean/a.txt"), Path("C:/Users/Jean/b.txt")]
+        finally:
+            window.destroy()
+    finally:
+        user_settings.load = original_load
+        user_settings.save = original_save
+
+
 def test_settings(app: Application) -> None:
     """Настройки по умолчанию загружаются, меняются в диалоге и сохраняются."""
     from eves_text import settings as user_settings
@@ -1103,7 +1247,9 @@ if __name__ == "__main__":
     test_windows_installer()
     test_linux_installer()
     test_linux_restart()
+    test_native_file_dialog_filters()
     test_app = test_window()
     test_formatting(test_app)
+    test_drag_and_drop(test_app)
     test_settings(test_app)
     print("OK: smoke test пройден")

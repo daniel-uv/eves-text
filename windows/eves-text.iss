@@ -1,9 +1,9 @@
 ; Установщик Eve's Text для Windows 11 (Inno Setup 6).
 ; Собирается после windows/build-portable.sh:
-;   ISCC.exe /DMyAppVersion=0.6.46 windows\eves-text.iss
+;   ISCC.exe /DMyAppVersion=0.6.47 windows\eves-text.iss
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.6.46"
+  #define MyAppVersion "0.6.47"
 #endif
 
 #define MyAppName "Eve's Text"
@@ -49,9 +49,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "dist\Eve's Text\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\Eve's Text.exe"; WorkingDir: "{app}"; IconFilename: "{app}\eves-text.ico"
+; AppUserModelID на ярлыке: Windows группирует окно и панель задач под
+; приложением, а не под pythonw.exe. Иконка берётся из встроенной в .exe.
+Name: "{group}\{#MyAppName}"; Filename: "{app}\Eve's Text.exe"; WorkingDir: "{app}"; IconFilename: "{app}\eves-text.ico"; AppUserModelID: "DanielUsov.EvesText"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\Eve's Text.exe"; WorkingDir: "{app}"; IconFilename: "{app}\eves-text.ico"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\Eve's Text.exe"; WorkingDir: "{app}"; IconFilename: "{app}\eves-text.ico"; Tasks: desktopicon; AppUserModelID: "DanielUsov.EvesText"
 
 [Registry]
 ; Приложение появляется в «Параметры → Приложения → Приложения по умолчанию»
@@ -59,6 +61,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\Eve's Text.exe"; WorkingDir
 Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "Eve's Text"; ValueData: "Software\Eve's Text\Capabilities"; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Eve's Text\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#MyAppName}"; Flags: uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\Eve's Text\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Текстовый редактор с проверкой орфографии и ИИ"; Flags: uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Eve's Text\Capabilities"; ValueType: string; ValueName: "ApplicationIcon"; ValueData: "{app}\Eve's Text.exe,0"; Flags: uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Eve's Text\Capabilities"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "DanielUsov.EvesText"; Flags: uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\Eve's Text\Capabilities\FileAssociations"; ValueType: string; ValueName: ".txt"; ValueData: "EvesText.txt"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Eve's Text\Capabilities\FileAssociations"; ValueType: string; ValueName: ".rtf"; ValueData: "EvesText.rtf"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Eve's Text"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "DanielUsov.EvesText"; Flags: uninsdeletekeyifempty
@@ -67,9 +71,11 @@ Root: HKCU; Subkey: "Software\Eve's Text"; ValueType: string; ValueName: "AppUse
 Root: HKCR; Subkey: "EvesText.txt"; ValueType: string; ValueData: "Документ Eve's Text"; Flags: uninsdeletekeyifempty
 Root: HKCR; Subkey: "EvesText.txt\DefaultIcon"; ValueType: string; ValueData: "{app}\eves-text.ico,0"; Flags: uninsdeletekey
 Root: HKCR; Subkey: "EvesText.txt\shell\open\command"; ValueType: string; ValueData: """{app}\Eve's Text.exe"" ""%1"""; Flags: uninsdeletekey
+Root: HKCR; Subkey: "EvesText.txt"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "DanielUsov.EvesText"; Flags: uninsdeletekeyifempty
 Root: HKCR; Subkey: "EvesText.rtf"; ValueType: string; ValueData: "Форматированный документ Eve's Text"; Flags: uninsdeletekeyifempty
 Root: HKCR; Subkey: "EvesText.rtf\DefaultIcon"; ValueType: string; ValueData: "{app}\eves-text.ico,0"; Flags: uninsdeletekey
 Root: HKCR; Subkey: "EvesText.rtf\shell\open\command"; ValueType: string; ValueData: """{app}\Eve's Text.exe"" ""%1"""; Flags: uninsdeletekey
+Root: HKCR; Subkey: "EvesText.rtf"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "DanielUsov.EvesText"; Flags: uninsdeletekeyifempty
 
 ; Добавляем в список «Открыть с помощью», но не делаем приложение основным.
 Root: HKCR; Subkey: ".txt\OpenWithProgids"; ValueType: string; ValueName: "EvesText.txt"; ValueData: ""; Flags: uninsdeletevalue

@@ -26,6 +26,8 @@
 
 - Обычный запуск — `Eve's Text.exe` в папке программы или ярлык в меню «Пуск».
   Это нативный GUI-исполняемый файл: он не открывает окно командной строки.
+  Иконка приложения встроена прямо в `.exe`, поэтому Windows показывает её
+  в Проводнике, в меню «Пуск» и на панели задач.
 - Диагностический запуск с консолью — `eves-text.bat`: если приложение падает,
   в окне будет виден текст ошибки, а подробности попадут в
   `%LOCALAPPDATA%\Eve's Text\crash.log`.
@@ -163,7 +165,7 @@ Eve's Text\
 5. Установщик (по желанию, нужен [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
    ```bat
-   ISCC.exe /DMyAppVersion=0.6.46 windows\eves-text.iss
+   ISCC.exe /DMyAppVersion=0.6.47 windows\eves-text.iss
    ```
 
    Готовый файл — `windows\dist-installer\EvesText-<версия>-win64-setup.exe`.

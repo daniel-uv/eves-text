@@ -66,6 +66,12 @@ jobs:
           if ($subsystem -ne 2) { throw "Лаунчер должен быть GUI-приложением, subsystem=$subsystem" }
           Write-Host "GUI-лагер OK (subsystem=$subsystem)"
 
+      - name: Проверить иконку лаунчера
+        shell: pwsh
+        run: |
+          & "windows\dist\Eve's Text\bin\python.exe" "windows\check_icon.py" "windows\dist\Eve's Text\Eve's Text.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Иконка не встроена в Eve's Text.exe" }
+
       - name: Проверить рантайм
         shell: pwsh
         run: |

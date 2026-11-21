@@ -153,8 +153,32 @@ fi
 # GCC на MSYS2 не преобразует путь с апострофом в каталоге, поэтому собираем
 # в windows/ (без апострофа) и только потом кладём exe в папку приложения.
 TMP_EXE="$ROOT/windows/eves-text-launcher.exe"
+RES_OBJ="$ROOT/windows/launcher.res"
+WINDRES="${WINDRES:-$PREFIX/bin/windres.exe}"
+if [ ! -x "$WINDRES" ]; then
+    WINDRES="$(command -v windres || true)"
+fi
+if [ -z "$WINDRES" ] || [ ! -x "$WINDRES" ]; then
+    echo "Не найден windres — нужен mingw-w64-ucrt-x86_64-binutils" >&2
+    exit 1
+fi
+# Иконка .exe берётся из launcher.rc. Без неё Windows показывает универсальную
+# иконку исполняемого файла в Проводнике и на панели задач.
+VERSION_COMMA="$(printf '%s' "$VERSION" | awk -F. '{printf "%d,%d,%d,0", $1, $2, $3}')"
+(
+    cd "$ROOT/windows"
+    "$WINDRES" -O coff \
+        -DAPP_VERSION="\"$VERSION\"" \
+        -DAPP_VERSION_COMMA="$VERSION_COMMA" \
+        launcher.rc launcher.res
+)
+if [ ! -f "$RES_OBJ" ]; then
+    echo "Ресурсы лаунчера не собраны" >&2
+    exit 1
+fi
 "$CC" -municode -mwindows -O2 -s \
-    "$ROOT/windows/launcher.c" -o "$TMP_EXE" -lshell32
+    "$ROOT/windows/launcher.c" "$RES_OBJ" -o "$TMP_EXE" -lshell32
+rm -f "$RES_OBJ"
 if [ ! -f "$TMP_EXE" ]; then
     echo "Лаунчер не собран" >&2
     exit 1

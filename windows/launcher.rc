@@ -1,0 +1,42 @@
+/* Ресурсы нативного лаунчера Eve's Text. */
+
+#include <winver.h>
+
+#ifndef APP_VERSION
+#define APP_VERSION "0.0.0"
+#endif
+#ifndef APP_VERSION_COMMA
+#define APP_VERSION_COMMA 0,0,0,0
+#endif
+
+/* ICON 1 — первая иконка в RT_GROUP_ICON; именно её Windows показывает
+   в Проводнике и на панели задач для Eve's Text.exe. */
+1 ICON "assets\\eves-text.ico"
+
+1 VERSIONINFO
+  FILEVERSION    APP_VERSION_COMMA
+  PRODUCTVERSION APP_VERSION_COMMA
+  FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+  FILEFLAGS      0
+  FILEOS         VOS_NT_WINDOWS32
+  FILETYPE       VFT_APP
+  FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName",      "Daniel Usov"
+      VALUE "FileDescription",  "Eve's Text"
+      VALUE "FileVersion",      APP_VERSION
+      VALUE "InternalName",     "Eve's Text"
+      VALUE "OriginalFilename", "Eve's Text.exe"
+      VALUE "ProductName",      "Eve's Text"
+      VALUE "ProductVersion",   APP_VERSION
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END
