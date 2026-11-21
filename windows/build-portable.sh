@@ -150,15 +150,16 @@ if [ -z "$CC" ] || [ ! -x "$CC" ]; then
     echo "Не найден GCC — нужен mingw-w64-ucrt-x86_64-gcc" >&2
     exit 1
 fi
-# GCC на MSYS2 не всегда корректно обрабатывает апостроф в -o, поэтому
-# сначала собираем в ASCII-имя, затем переименовываем в нужное.
+# GCC на MSYS2 не преобразует путь с апострофом в каталоге, поэтому собираем
+# в windows/ (без апострофа) и только потом кладём exe в папку приложения.
+TMP_EXE="$ROOT/windows/eves-text-launcher.exe"
 "$CC" -municode -mwindows -O2 -s \
-    "$ROOT/windows/launcher.c" -o "$DIST/eves-text-launcher.exe" -lshell32
-if [ ! -f "$DIST/eves-text-launcher.exe" ]; then
+    "$ROOT/windows/launcher.c" -o "$TMP_EXE" -lshell32
+if [ ! -f "$TMP_EXE" ]; then
     echo "Лаунчер не собран" >&2
     exit 1
 fi
-mv "$DIST/eves-text-launcher.exe" "$DIST/Eve's Text.exe"
+mv "$TMP_EXE" "$DIST/Eve's Text.exe"
 if [ ! -f "$DIST/Eve's Text.exe" ]; then
     echo "Лаунчер не собран" >&2
     exit 1
