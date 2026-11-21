@@ -69,31 +69,34 @@ def subdirectory(data: bytes, root: int, directory: int, wanted: int) -> int:
     raise RuntimeError(f"ресурс с ID {wanted} не найден")
 
 
-def first_subdirectory(data: bytes, root: int, directory: int) -> int:
-    """Первая поддиректория (уровень языка) внутри директории имени."""
-    for _value, offset in entries(data, directory):
-        relative = u32(data, offset + 4)
-        if relative & 0x80000000 and (relative & 0x7FFFFFFF):
-            return root + (relative & 0x7FFFFFFF)
-    raise RuntimeError("у ресурса нет языковой директории")
-
-
 def data_entry(data: bytes, root: int, directory: int) -> tuple[int, int]:
-    """RVA и размер данных из языковой директории (уровень 3)."""
+    """RVA и размер данных из директории с записями IMAGE_RESOURCE_DATA_ENTRY."""
     for _value, offset in entries(data, directory):
         relative = u32(data, offset + 4)
         if relative & 0x80000000 == 0 and relative:
             entry = root + relative
             return u32(data, entry), u32(data, entry + 4)
-    raise RuntimeError("у ресурса нет языковых данных")
+    raise RuntimeError("у ресурса нет данных")
+
+
+def resource_data(data: bytes, root: int, directory: int) -> tuple[int, int]:
+    """Спуститься на уровень языка, если он есть, и прочитать данные.
+
+    windres иногда пишет данные сразу в директорию имени, минуя уровень
+    языка, поэтому поддерживаются оба варианта дерева ресурсов.
+    """
+    for _value, offset in entries(data, directory):
+        relative = u32(data, offset + 4)
+        if relative & 0x80000000 and (relative & 0x7FFFFFFF):
+            return data_entry(data, root, root + (relative & 0x7FFFFFFF))
+    return data_entry(data, root, directory)
 
 
 def resource(data: bytes, root: int, type_id: int, name_id: int = 1) -> tuple[int, int]:
-    """Найти ресурс type_id/name_id: тип → имя → язык → данные."""
+    """Найти ресурс type_id/name_id: тип → имя → (язык) → данные."""
     node = subdirectory(data, root, root, type_id)
     node = subdirectory(data, root, node, name_id)
-    node = first_subdirectory(data, root, node)
-    return data_entry(data, root, node)
+    return resource_data(data, root, node)
 
 
 def check(exe: Path) -> str:

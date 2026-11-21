@@ -347,7 +347,7 @@ def test_check_icon_parser() -> None:
             flag = 0x80000000 if is_dir else 0
             struct.pack_into("<II", blob, base + 16 + index * 8, name, offset | flag)
 
-    def build_pe(pe32plus: bool) -> bytes:
+    def build_pe(pe32plus: bool, with_language: bool) -> bytes:
         pe = 0x80
         coff = pe + 4
         opt = coff + 20
@@ -379,30 +379,47 @@ def test_check_icon_parser() -> None:
         struct.pack_into("<II", blob, directories + 16, res_rva, 0x400)
         struct.pack_into("<IIII", blob, section + 8, 0x1000, res_rva, 0x400, res_raw)
 
-        # Дерево ресурсов: тип → имя → язык → IMAGE_RESOURCE_DATA_ENTRY.
+        # Тип → имя → (язык) → IMAGE_RESOURCE_DATA_ENTRY. windres может
+        # не создавать уровень языка, поэтому проверяем оба варианта.
         resource_dir(blob, res(0x00), [(14, 0x50, True), (3, 0xD4, True)])
         resource_dir(blob, res(0x50), [(1, 0x70, True)])
-        resource_dir(blob, res(0x70), [(0x409, 0x90, True)])
-        resource_dir(blob, res(0x90), [(0x409, 0xB0, False)])
-        struct.pack_into("<IIII", blob, res(0xB0), res_rva + 0x100, 20, 0, 0)
-        struct.pack_into("<HHH", blob, res(0x100), 0, 1, 1)
+        resource_dir(
+            blob,
+            res(0x70),
+            [(0x409, 0x90, True)] if with_language else [(0x409, 0xB0, False)],
+        )
+        if with_language:
+            resource_dir(blob, res(0x90), [(0x409, 0xB0, False)])
+        struct.pack_into("<IIII", blob, res(0xB0), res_rva + 0x180, 20, 0, 0)
+        struct.pack_into("<HHH", blob, res(0x180), 0, 1, 1)
         struct.pack_into(
-            "<BBBBHHIH", blob, res(0x106), 16, 16, 0, 0, 1, 32, 32, 7
+            "<BBBBHHIH", blob, res(0x186), 16, 16, 0, 0, 1, 32, 32, 7
         )
 
         resource_dir(blob, res(0xD4), [(7, 0xF4, True)])
-        resource_dir(blob, res(0xF4), [(1, 0x114, True)])
-        resource_dir(blob, res(0x114), [(0x409, 0x134, False)])
-        struct.pack_into("<IIII", blob, res(0x134), res_rva + 0x200, 32, 0, 0)
+        if with_language:
+            resource_dir(blob, res(0xF4), [(1, 0x114, True)])
+            resource_dir(blob, res(0x114), [(0x409, 0x134, False)])
+            icon_data_entry = 0x134
+        else:
+            resource_dir(blob, res(0xF4), [(1, 0x114, False)])
+            icon_data_entry = 0x114
+        struct.pack_into(
+            "<IIII", blob, res(icon_data_entry), res_rva + 0x200, 32, 0, 0
+        )
         blob[res(0x200) : res(0x220)] = b"\x89PNG" + b"\0" * 28
         return bytes(blob)
 
     with tempfile.TemporaryDirectory() as tmp:
         for pe32plus in (True, False):
-            path = Path(tmp) / ("x64.exe" if pe32plus else "x86.exe")
-            path.write_bytes(build_pe(pe32plus))
-            detail = module.check(path)
-            assert "RT_ICON 7" in detail, detail
+            for with_language in (True, False):
+                suffix = ("x64" if pe32plus else "x86") + (
+                    "-lang" if with_language else "-flat"
+                )
+                path = Path(tmp) / f"{suffix}.exe"
+                path.write_bytes(build_pe(pe32plus, with_language))
+                detail = module.check(path)
+                assert "RT_ICON 7" in detail, detail
 
 
 def test_windows_installer() -> None:
