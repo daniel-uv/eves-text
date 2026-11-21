@@ -47,6 +47,10 @@ ALIGNMENTS: tuple[tuple[str, str, Gtk.Justification, str], ...] = (
 
 DEFAULT_FONT_SIZE = 12
 
+# Тег жирного шрифта и префикс тегов размера для отдельных кусков текста.
+BOLD_TAG = "format-bold"
+SIZE_TAG_PREFIX = "format-size:"
+
 # Класс, который ставим на кнопку вручную: в GTK3 псевдокласс :hover
 # не всегда применяется (например, в Windows-бандле), поэтому подсветку
 # задаём аварийным классом и не полагаемся только на CSS.
@@ -189,6 +193,15 @@ class DocumentTab:
             key: self.buffer.create_tag(f"alignment:{key}", justification=alignment)
             for key, _icon, alignment, _tip in ALIGNMENTS
         }
+
+        # Оформление отдельного текста: жирный и размер для выделения.
+        self.bold_tag = self.buffer.create_tag(
+            BOLD_TAG, weight=Pango.Weight.BOLD, weight_set=True
+        )
+        self.size_tags: dict[int, Gtk.TextTag] = {}
+        self.formatted = False
+        self.bold_typing = False
+        self.active_size: int | None = None
 
         # Проверка орфографии делается своим слоем на текстовых тегах.
         self.spellcheck = SpellCheck(self.buffer, self.view)
@@ -484,6 +497,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.redo_action = None
         self._font_size = DEFAULT_FONT_SIZE
         self._default_align = "left"
+        self._format_guard = False
         self._settings_dialog: Gtk.Dialog | None = None
         self._settings_pending = False
         self._settings_size_spin: FontSizeEntry | None = None
@@ -928,6 +942,10 @@ class MainWindow(Gtk.ApplicationWindow):
         except TypeError:
             pass
 
+        # Файл можно бросить и прямо в область ввода, а не только в шапку.
+        self._setup_drop_target(tab.view)
+        self._setup_drop_target(tab.scroller)
+
         tab.view.connect("button-press-event", self._on_view_button_press)
         tab.view.connect("populate-popup", self._on_populate_popup)
         tab.buffer.connect_after("insert-text", self._on_insert_text)
@@ -942,6 +960,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_tab_cursor(self, tab: DocumentTab) -> None:
         if tab is self._active_tab:
             self._update_status()
+            self._update_format_controls()
 
     def _on_tab_modified(self, tab: DocumentTab) -> None:
         self._update_tab_label(tab)
@@ -975,6 +994,7 @@ class MainWindow(Gtk.ApplicationWindow):
         tab.counts_cache = (-1, -1, -1)
         self._update_counts()
         self._update_undo()
+        self._update_format_controls()
         tab.view.grab_focus()
 
     def _select_tab(self, tab: DocumentTab) -> None:
@@ -1250,6 +1270,29 @@ class MainWindow(Gtk.ApplicationWindow):
         content.pack_start(
             Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4
         )
+
+        # Жирный и размер для отдельного куска текста.
+        self.bold_button = Gtk.ToggleButton(label="Ж")
+        self.bold_button.set_relief(Gtk.ReliefStyle.NONE)
+        self.bold_button.get_style_context().add_class("format-button")
+        self.bold_button.set_tooltip_text("Жирный (Ctrl+B)")
+        self.bold_button.connect("toggled", self._on_bold_toggled)
+        content.pack_start(self.bold_button, False, False, 0)
+
+        content.pack_start(Gtk.Label(label="Размер выделения:"), False, False, 0)
+        self.selection_size_spin = FontSizeEntry(self._font_size)
+        self.selection_size_spin.set_tooltip_text("Размер шрифта для выделенного текста")
+        content.pack_start(self.selection_size_spin, False, False, 0)
+        self.apply_size_button = Gtk.Button(label="Применить")
+        self.apply_size_button.set_relief(Gtk.ReliefStyle.NONE)
+        self.apply_size_button.get_style_context().add_class("format-button")
+        self.apply_size_button.set_tooltip_text("Применить размер к выделению")
+        self.apply_size_button.connect("clicked", self._on_apply_size)
+        content.pack_start(self.apply_size_button, False, False, 0)
+
+        content.pack_start(
+            Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4
+        )
         content.pack_start(Gtk.Label(label="Выравнивание:"), False, False, 0)
 
         self.align_buttons: dict[str, Gtk.ToggleButton] = {}
@@ -1432,6 +1475,7 @@ class MainWindow(Gtk.ApplicationWindow):
             ("prev-tab", self.action_prev_tab, ["<Primary><Shift>Tab"]),
             ("save", self.action_save, ["<Primary>s"]),
             ("save-as", self.action_save_as, ["<Primary><Shift>s"]),
+            ("bold", self.action_bold, ["<Primary>b"]),
             ("undo", self.action_undo, ["<Primary>z"]),
             ("redo", self.action_redo, ["<Primary><Shift>z", "<Primary>y"]),
             ("cut", self.action_cut, ["<Primary>x"]),
@@ -1596,13 +1640,25 @@ class MainWindow(Gtk.ApplicationWindow):
         return None
 
     def _on_insert_text(self, buffer, location, text, _length) -> None:
-        """Продлевает выравнивание на новый текст и новые абзацы."""
+        """Продлевает выравнивание и оформление на новый текст."""
         tab = self._tab_for_buffer(buffer)
         if tab is None:
             return
         tags = tab.align_tags
         end_offset = location.get_offset()
-        start_offset = end_offset - len(text)
+        start_offset = max(0, end_offset - len(text))
+        start = buffer.get_iter_at_offset(start_offset)
+        end = buffer.get_iter_at_offset(end_offset)
+
+        # Жирный и размер, включённые для выделения, должны действовать
+        # и на текст, который придёт на место выделения.
+        if tab.bold_typing:
+            buffer.apply_tag(tab.bold_tag, start, end)
+        if tab.active_size is not None:
+            buffer.apply_tag(self._get_size_tag(tab, tab.active_size), start, end)
+        if not text:
+            return
+
         # В пустом документе тегов ещё нет: новый текст наследует выравнивание
         # по умолчанию, которое показывает панель.
         fallback = tab.current_align if tab.current_align != "left" else None
@@ -1612,8 +1668,6 @@ class MainWindow(Gtk.ApplicationWindow):
             # строка унаследовала выравнивание предыдущей.
             key = self._alignment_at(buffer, tags, start_offset - 1) or fallback
             if key is not None:
-                start = buffer.get_iter_at_offset(start_offset)
-                end = buffer.get_iter_at_offset(end_offset)
                 buffer.apply_tag(tags[key], start, end)
             return
 
@@ -1640,8 +1694,6 @@ class MainWindow(Gtk.ApplicationWindow):
             line_end.forward_line()
             buffer.apply_tag(tags[key], line_start, line_end)
         else:
-            start = buffer.get_iter_at_offset(start_offset)
-            end = buffer.get_iter_at_offset(end_offset)
             buffer.apply_tag(tags[key], start, end)
 
     def _sync_alignment_buttons(self) -> None:
@@ -1664,14 +1716,19 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # -------------------------------------------------------------- signals
 
+    def _setup_drop_target(self, widget: Gtk.Widget) -> None:
+        """Разрешить бросать файлы на окно, поле ввода и его прокрутку."""
+        widget.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
+        widget.drag_dest_add_uri_targets()
+        widget.drag_dest_add_text_targets()
+        widget.connect("drag-data-received", self._on_drag_data)
+
     def _connect_signals(self) -> None:
         self.connect("delete-event", self._on_delete_event)
         self.connect("map", self._on_map)
 
         # Перетаскивание файла в окно.
-        self.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
-        self.drag_dest_add_uri_targets()
-        self.connect("drag-data-received", self._on_drag_data)
+        self._setup_drop_target(self)
 
         settings = Gtk.Settings.get_default()
         if settings is not None:
@@ -3095,17 +3152,31 @@ class MainWindow(Gtk.ApplicationWindow):
         text: str,
         path: Path | None,
         encoding: str,
+        spans: list[document.Span] | None = None,
     ) -> None:
         """Заменяет содержимое вкладки, не создавая шагов отмены."""
+        spans = spans or []
         try:
             tab.buffer.begin_not_undoable_action()
             tab.buffer.set_text(text)
-            self._retag_alignment(tab, self._default_align)
+            if any(values.get("align") for _first, _last, values in spans):
+                self._apply_spans(tab, spans)
+            else:
+                self._retag_alignment(tab, self._default_align)
+                bold_spans = [
+                    span for span in spans if span[2].get("bold") or span[2].get("size")
+                ]
+                if bold_spans:
+                    self._apply_spans(tab, bold_spans)
         finally:
             try:
                 tab.buffer.end_not_undoable_action()
             except Exception:  # noqa: BLE001
                 pass
+        if not spans:
+            tab.formatted = False
+            tab.bold_typing = False
+            tab.active_size = None
         tab.buffer.set_modified(False)
         tab.path = Path(path) if path is not None else None
         tab.encoding = encoding
@@ -3129,7 +3200,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def open_path(self, path: str | Path) -> None:
         path = Path(path)
         try:
-            text, encoding = document.read_text(path)
+            text, encoding, spans = document.read_document(path)
         except OSError as exc:
             self._show_error("Не удалось открыть файл", str(exc))
             return
@@ -3139,8 +3210,9 @@ class MainWindow(Gtk.ApplicationWindow):
         tab = self._pristine_tab()
         if tab is None:
             tab = self._create_tab()
-        self._load_tab_text(tab, text, path, encoding)
+        self._load_tab_text(tab, text, path, encoding, spans)
         self._select_tab(tab)
+        self._update_format_controls()
 
     def action_new(self, *_args) -> None:
         self._create_tab()
@@ -3178,11 +3250,13 @@ class MainWindow(Gtk.ApplicationWindow):
     def _save_tab(self, tab: DocumentTab | None) -> bool:
         if tab is None:
             return False
-        if tab.path is None:
+        if tab.path is None or (
+            self._has_rtf_content(tab) and not document.is_rtf(tab.path)
+        ):
             return self._save_tab_as(tab)
         return self._write_tab(tab, tab.path)
 
-    def _save_tab_as(self, tab: DocumentTab | None) -> bool:
+    def _save_tab_as(self, tab: DocumentTab | None, force_rtf: bool = False) -> bool:
         if tab is None:
             return False
         dialog = Gtk.FileChooserNative.new(
@@ -3190,11 +3264,14 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         dialog.set_do_overwrite_confirmation(True)
         self._add_filters(dialog)
-        if tab.path is not None:
+        if self._has_rtf_content(tab, force_rtf):
+            dialog.set_current_name(f"{tab.default_name}.rtf")
+        elif tab.path is not None:
             dialog.set_current_name(tab.path.name)
-            dialog.set_current_folder(str(tab.path.parent))
         else:
             dialog.set_current_name(f"{tab.default_name}.txt")
+        if tab.path is not None:
+            dialog.set_current_folder(str(tab.path.parent))
 
         response = dialog.run()
         path = dialog.get_filename()
@@ -3203,13 +3280,23 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
         return self._write_tab(tab, Path(path))
 
+    def _has_rtf_content(self, tab: DocumentTab, force_rtf: bool = False) -> bool:
+        """Нужно ли сохранять вкладку как RTF (есть оформление или был RTF)."""
+        if force_rtf or self._collect_spans(tab):
+            return True
+        return bool(tab.path is not None and document.is_rtf(tab.path))
+
     def _write_tab(self, tab: DocumentTab, path: Path) -> bool:
+        spans = self._collect_spans(tab)
         try:
-            document.write_text(path, self.get_text(tab))
+            document.write_document(
+                path, self.get_text(tab), spans, default_size=self._font_size
+            )
         except OSError as exc:
             self._show_error("Не удалось сохранить файл", str(exc))
             return False
         tab.path = Path(path)
+        tab.formatted = bool(spans)
         tab.buffer.set_modified(False)
         self._update_tab_label(tab)
         if tab is self._active_tab:
@@ -3218,6 +3305,12 @@ class MainWindow(Gtk.ApplicationWindow):
 
     @staticmethod
     def _add_filters(dialog: Gtk.FileChooserNative) -> None:
+        rtf_filter = Gtk.FileFilter()
+        rtf_filter.set_name("Форматированный текст (RTF)")
+        rtf_filter.add_mime_type("application/rtf")
+        rtf_filter.add_pattern("*.rtf")
+        dialog.add_filter(rtf_filter)
+
         text_filter = Gtk.FileFilter()
         text_filter.set_name("Текстовые файлы")
         text_filter.add_mime_type("text/plain")
@@ -3262,6 +3355,161 @@ class MainWindow(Gtk.ApplicationWindow):
     def action_select_all(self, *_args) -> None:
         start, end = self.buffer.get_bounds()
         self.buffer.select_range(end, start)
+
+    # ------------------------------------------------------------- оформление
+
+    def _get_size_tag(self, tab: DocumentTab, size: int) -> Gtk.TextTag:
+        size = int(size)
+        tag = tab.size_tags.get(size)
+        if tag is None:
+            tag = tab.buffer.create_tag(
+                f"{SIZE_TAG_PREFIX}{size}", size=size * Pango.SCALE
+            )
+            tab.size_tags[size] = tag
+        return tag
+
+    @staticmethod
+    def _tag_ranges(buffer: Gtk.TextBuffer, tag: Gtk.TextTag):
+        """Диапазоны, где активен тег (для сбора оформления при сохранении)."""
+        iterator = buffer.get_start_iter()
+        while not iterator.is_end():
+            if iterator.has_tag(tag):
+                start = iterator.get_offset()
+                if not iterator.forward_to_tag_toggle(tag):
+                    yield start, iterator.get_offset()
+                    return
+                yield start, iterator.get_offset()
+            elif not iterator.forward_to_tag_toggle(tag):
+                return
+
+    def action_bold(self, *_args) -> None:
+        """Включить/выключить жирный для выделения или для следующего ввода."""
+        tab = self._active_tab
+        if tab is None:
+            return
+        buffer = tab.buffer
+        if buffer.get_has_selection():
+            start, end = buffer.get_selection_bounds()
+            if start.has_tag(tab.bold_tag):
+                buffer.remove_tag(tab.bold_tag, start, end)
+                tab.bold_typing = False
+            else:
+                buffer.apply_tag(tab.bold_tag, start, end)
+                tab.bold_typing = True
+        else:
+            iterator = buffer.get_iter_at_mark(buffer.get_insert())
+            current = tab.bold_typing or iterator.has_tag(tab.bold_tag)
+            tab.bold_typing = not current
+        self._refresh_formatted(tab)
+        self._update_format_controls()
+
+    def _on_bold_toggled(self, *_args) -> None:
+        if self._format_guard:
+            return
+        self.action_bold()
+
+    def _on_apply_size(self, *_args) -> None:
+        tab = self._active_tab
+        if tab is None:
+            return
+        buffer = tab.buffer
+        if not buffer.get_has_selection():
+            self._set_status("Выделите текст, чтобы задать ему размер")
+            return
+        size = int(self.selection_size_spin.get_value())
+        start, end = buffer.get_selection_bounds()
+        for old_size, old_tag in list(tab.size_tags.items()):
+            if old_size != size:
+                buffer.remove_tag(old_tag, start, end)
+        buffer.apply_tag(self._get_size_tag(tab, size), start, end)
+        tab.active_size = size
+        self._refresh_formatted(tab)
+        self._update_format_controls()
+
+    def _refresh_formatted(self, tab: DocumentTab) -> None:
+        tab.formatted = bool(self._collect_spans(tab))
+
+    def _collect_spans(self, tab: DocumentTab) -> list[document.Span]:
+        """Собрать оформление буфера в диапазоны для RTF."""
+        buffer = tab.buffer
+        start, end = buffer.get_bounds()
+        text = buffer.get_text(start, end, True)
+        if not text:
+            return []
+        changes: dict[int, dict[str, object]] = {}
+
+        def change(offset: int, key: str, value: object) -> None:
+            changes.setdefault(offset, {})[key] = value
+
+        for first, last in self._tag_ranges(buffer, tab.bold_tag):
+            change(first, "bold", True)
+            change(last, "bold", False)
+        for size, tag in tab.size_tags.items():
+            for first, last in self._tag_ranges(buffer, tag):
+                change(first, "size", size)
+                change(last, "size", None)
+
+        offset = 0
+        for line in text.splitlines(keepends=True):
+            iterator = buffer.get_iter_at_offset(offset)
+            key = self._alignment_at(buffer, tab.align_tags, offset)
+            change(offset, "align", key or "left")
+            offset += len(line)
+
+        attrs: dict[str, object] = {"bold": False, "size": None, "align": "left"}
+        spans: list[document.Span] = []
+        span_start = 0
+        for position in sorted(changes):
+            if position > span_start:
+                spans.append((span_start, position, dict(attrs)))
+            attrs.update(changes[position])
+            span_start = position
+        if span_start < len(text):
+            spans.append((span_start, len(text), dict(attrs)))
+        return [
+            (first, last, values)
+            for first, last, values in spans
+            if document._is_meaningful(values)
+        ]
+
+    def _apply_spans(self, tab: DocumentTab, spans: list[document.Span]) -> None:
+        buffer = tab.buffer
+        for first, last, values in spans:
+            start = buffer.get_iter_at_offset(first)
+            end = buffer.get_iter_at_offset(last)
+            if values.get("bold"):
+                buffer.apply_tag(tab.bold_tag, start, end)
+            size = values.get("size")
+            if isinstance(size, int):
+                buffer.apply_tag(self._get_size_tag(tab, size), start, end)
+            align = values.get("align")
+            if align in tab.align_tags:
+                buffer.apply_tag(tab.align_tags[str(align)], start, end)
+        tab.formatted = bool(spans)
+
+    def _update_format_controls(self) -> None:
+        tab = self._active_tab
+        if tab is None:
+            return
+        buffer = tab.buffer
+        if buffer.get_has_selection():
+            iterator, _end = buffer.get_selection_bounds()
+            bold = iterator.has_tag(tab.bold_tag)
+        else:
+            iterator = buffer.get_iter_at_mark(buffer.get_insert())
+            bold = tab.bold_typing or iterator.has_tag(tab.bold_tag)
+        size = tab.active_size
+        for value, tag in tab.size_tags.items():
+            if iterator.has_tag(tag):
+                size = value
+                break
+        self._format_guard = True
+        try:
+            self.bold_button.set_active(bool(bold))
+            if size is not None:
+                self.selection_size_spin.set_value(size)
+        finally:
+            self._format_guard = False
 
     def action_quit(self, *_args) -> None:
         self.close()
@@ -3365,17 +3613,42 @@ class MainWindow(Gtk.ApplicationWindow):
             self._ai_pull_cancel.set()
         self._managed_ollama.stop()
 
-    def _on_drag_data(self, widget, context, x, y, data, info, time) -> None:
-        uris = data.get_uris() or []
-        paths = []
+    def _open_dropped_uris(self, uris: list[str]) -> bool:
+        """Открыть файлы, брошенные в окно. Возвращает True, если открыли."""
+        opened = False
         for uri in uris:
-            gfile = Gio.File.new_for_uri(uri)
-            path = gfile.get_path()
-            if path:
-                paths.append(path)
-        for path in paths:
-            self.open_path(path)
-        Gtk.drag_finish(context, bool(paths), False, time)
+            try:
+                gfile = Gio.File.new_for_uri(uri)
+                path = gfile.get_path()
+            except Exception:  # noqa: BLE001
+                continue
+            if path and Path(path).is_file():
+                self.open_path(Path(path))
+                opened = True
+        return opened
+
+    def _on_drag_data(self, widget, context, x, y, data, info, time) -> bool:
+        uris = data.get_uris() or []
+        handled = self._open_dropped_uris(uris)
+        if not handled:
+            # Некоторые менеджеры файлов дают только текст с путём.
+            text = data.get_text() or ""
+            candidate = text.strip()
+            if candidate.startswith("file://"):
+                handled = self._open_dropped_uris([candidate])
+            elif candidate and Path(candidate).is_file():
+                self.open_path(Path(candidate))
+                handled = True
+            elif text and isinstance(widget, Gtk.TextView):
+                # Обычный текст, брошенный в поле ввода, вставляем как есть.
+                buffer = widget.get_buffer()
+                position = buffer.get_iter_at_location(x, y)[1]
+                buffer.insert_interactive(position, text, True)
+                handled = True
+        Gtk.drag_finish(context, handled, False, time)
+        # Событие не должно уйти родительскому виджету: иначе один и тот же
+        # файл откроется дважды — с поля ввода и сразу с окна.
+        return True
 
     def _on_about(self, *_args) -> None:
         dialog = Gtk.AboutDialog(transient_for=self, modal=True)

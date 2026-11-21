@@ -11,5 +11,5 @@ Exec=eves-text %F
 Icon=eves-text
 Terminal=false
 Categories=Utility;TextEditor;
-MimeType=text/plain;
+MimeType=text/plain;application/rtf;
 StartupNotify=true

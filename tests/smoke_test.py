@@ -47,6 +47,37 @@ def test_document() -> None:
     assert document.text_stats("один два три") == (3, 12, 10)
 
 
+def test_document_rtf() -> None:
+    """Оформление живёт в RTF, обычный текст остаётся чистым."""
+    with tempfile.TemporaryDirectory() as tmp:
+        text = "Обычный текст. Жирный кусок и 18-й размер. Ещё строка."
+        spans = [
+            (15, 28, {"bold": True, "align": "left"}),
+            (33, 50, {"size": 18, "align": "left"}),
+        ]
+        path = Path(tmp) / "оформление.rtf"
+        document.write_document(path, text, spans, default_size=12)
+
+        loaded, encoding, loaded_spans = document.read_document(path)
+        assert loaded == text, repr(loaded)
+        assert encoding == "RTF", encoding
+        bold = [span for span in loaded_spans if span[2].get("bold")]
+        sized = [span for span in loaded_spans if span[2].get("size") == 18]
+        assert any(span[0] <= 15 and span[1] >= 28 for span in bold), loaded_spans
+        assert any(span[0] <= 33 and span[1] >= 50 for span in sized), loaded_spans
+
+        # Текст между кусками не должен стать жирным или крупным.
+        middle = next(span for span in loaded_spans if span[0] <= 30 < span[1])
+        assert not middle[2].get("bold"), middle
+        assert middle[2].get("size") != 18, middle
+
+        plain = Path(tmp) / "обычный.txt"
+        document.write_document(plain, text, [])
+        assert not plain.read_text(encoding="utf-8").startswith("{\\rtf")
+        loaded, encoding, loaded_spans = document.read_document(plain)
+        assert loaded == text and encoding == "UTF-8" and loaded_spans == []
+
+
 def test_updates() -> None:
     assert updates.tag_version("v0.6.5") == "0.6.5"
     assert updates.tag_version("win-v0.6.5") == "0.6.5"
@@ -347,6 +378,26 @@ def test_windows_installer() -> None:
         finally:
             restore()
         assert not ok and "UAC" in error, (ok, error)
+
+    # Инсталлятор должен регистрировать настоящий .exe, а не pythonw.exe.
+    iss = (ROOT / "windows" / "eves-text.iss").read_text(encoding="utf-8")
+    assert "{app}\\Eve's Text.exe" in iss
+    assert "RegisteredApplications" in iss
+    assert "FileAssociations" in iss
+    assert ".txt" in iss and ".rtf" in iss
+    assert "OpenWithProgids" in iss
+    assert "AppUserModelID" in iss
+    assert 'Filename: "{app}\\bin\\pythonw.exe"' not in iss
+
+    launcher_c = (ROOT / "windows" / "launcher.c").read_text(encoding="utf-8")
+    assert "wWinMain" in launcher_c
+    assert "CreateProcessW" in launcher_c
+    assert "SetCurrentProcessExplicitAppUserModelID" in launcher_c
+    build = (ROOT / "windows" / "build-portable.sh").read_text(encoding="utf-8")
+    assert "launcher.c" in build and "Eve's Text.exe" in build
+    assert "-mwindows" in build
+    ci = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    assert "mingw-w64-ucrt-x86_64-gcc" in ci
 
 
 def test_linux_installer() -> None:
@@ -747,6 +798,95 @@ def test_window() -> Application:
     return app
 
 
+def test_formatting(app: Application) -> None:
+    """Жирный, размер куска текста и drop файлов работают в окне."""
+    from eves_text import settings as user_settings
+
+    original_load = user_settings.load
+    original_save = user_settings.save
+    user_settings.load = lambda: {}
+    user_settings.save = lambda data: None
+
+    try:
+        window = MainWindow(application=app)
+        try:
+            text = "Жирный и обычный"
+            window.set_text(text, Path("/tmp/формат.txt"))
+            tab = window._active_tab
+            assert tab is not None
+
+            buffer = window.buffer
+            buffer.select_range(
+                buffer.get_iter_at_offset(0), buffer.get_iter_at_offset(6)
+            )
+            window.action_bold()
+            assert buffer.get_iter_at_offset(1).has_tag(tab.bold_tag)
+            assert not buffer.get_iter_at_offset(8).has_tag(tab.bold_tag)
+            assert window.bold_button.get_active() is True
+
+            # Размер применяется только к выделенному куску.
+            window.selection_size_spin.set_value(18)
+            buffer.select_range(
+                buffer.get_iter_at_offset(7), buffer.get_iter_at_offset(16)
+            )
+            window._on_apply_size()
+            tag_18 = tab.size_tags[18]
+            assert buffer.get_iter_at_offset(8).has_tag(tag_18)
+            assert not buffer.get_iter_at_offset(1).has_tag(tag_18)
+
+            spans = window._collect_spans(tab)
+            assert any(values.get("bold") for _a, _b, values in spans), spans
+            assert any(values.get("size") == 18 for _a, _b, values in spans), spans
+            assert window._has_rtf_content(tab)
+
+            with tempfile.TemporaryDirectory() as tmp:
+                rtf = Path(tmp) / "оформление.rtf"
+                assert window._write_tab(tab, rtf)
+                raw = rtf.read_bytes()
+                assert raw.startswith(b"{\\rtf"), raw[:20]
+                loaded, encoding, loaded_spans = document.read_document(rtf)
+                assert loaded == text, repr(loaded)
+                assert encoding == "RTF"
+                assert any(values.get("bold") for _a, _b, values in loaded_spans)
+                assert any(values.get("size") == 18 for _a, _b, values in loaded_spans)
+
+                # Файл без оформления остаётся обычным текстом.
+                window.action_new()
+                clean = window._active_tab
+                assert clean is not None
+                window.set_text("Чистый текст")
+                clean = window._active_tab
+                plain = Path(tmp) / "чистый.txt"
+                assert window._write_tab(clean, plain)
+                assert not plain.read_text(encoding="utf-8").startswith("{\\rtf")
+                assert not window._has_rtf_content(clean)
+
+                # Брошенный в окно файл открывается в отдельной вкладке.
+                dropped = Path(tmp) / "из dragon drop.txt"
+                dropped.write_text("Текст из брошенного файла", encoding="utf-8")
+                uri = Gio.File.new_for_path(str(dropped)).get_uri()
+                before = len(window._tabs)
+                assert window._open_dropped_uris([uri]) is True
+                assert len(window._tabs) == before + 1
+                assert window.get_text() == "Текст из брошенного файла"
+
+            # Ввод после включения жирного продолжает оформление.
+            window.action_new()
+            typing = window._active_tab
+            assert typing is not None
+            window.set_text("")
+            typing = window._active_tab
+            typing.bold_typing = True
+            position = window.buffer.get_end_iter()
+            window.buffer.insert(position, "новый")
+            assert window.buffer.get_iter_at_offset(1).has_tag(typing.bold_tag)
+        finally:
+            window.destroy()
+    finally:
+        user_settings.load = original_load
+        user_settings.save = original_save
+
+
 def test_settings(app: Application) -> None:
     """Настройки по умолчанию загружаются, меняются в диалоге и сохраняются."""
     from eves_text import settings as user_settings
@@ -869,6 +1009,7 @@ def test_settings(app: Application) -> None:
 
 if __name__ == "__main__":
     test_document()
+    test_document_rtf()
     test_updates()
     test_win_theme()
     test_caret_blinker()
@@ -879,5 +1020,6 @@ if __name__ == "__main__":
     test_linux_installer()
     test_linux_restart()
     test_app = test_window()
+    test_formatting(test_app)
     test_settings(test_app)
     print("OK: smoke test пройден")

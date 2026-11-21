@@ -1,9 +1,9 @@
 ; Установщик Eve's Text для Windows 11 (Inno Setup 6).
 ; Собирается после windows/build-portable.sh:
-;   ISCC.exe /DMyAppVersion=0.6.43 windows\eves-text.iss
+;   ISCC.exe /DMyAppVersion=0.6.44 windows\eves-text.iss
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.6.43"
+  #define MyAppVersion "0.6.44"
 #endif
 
 #define MyAppName "Eve's Text"
@@ -36,6 +36,7 @@ PrivilegesRequired=admin
 MinVersion=10.0.22000
 CloseApplications=yes
 RestartApplications=no
+ChangesAssociations=yes
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -48,9 +49,33 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "dist\Eve's Text\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\bin\pythonw.exe"; Parameters: """{app}\app\launcher.py"""; WorkingDir: "{app}"; IconFilename: "{app}\eves-text.ico"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\Eve's Text.exe"; WorkingDir: "{app}"; IconFilename: "{app}\eves-text.ico"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\bin\pythonw.exe"; Parameters: """{app}\app\launcher.py"""; WorkingDir: "{app}"; IconFilename: "{app}\eves-text.ico"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\Eve's Text.exe"; WorkingDir: "{app}"; IconFilename: "{app}\eves-text.ico"; Tasks: desktopicon
+
+[Registry]
+; Приложение появляется в «Параметры → Приложения → Приложения по умолчанию»
+; только если оно зарегистрировано через RegisteredApplications + Capabilities.
+Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "Eve's Text"; ValueData: "Software\Eve's Text\Capabilities"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Eve's Text\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#MyAppName}"; Flags: uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Eve's Text\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Текстовый редактор с проверкой орфографии и ИИ"; Flags: uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Eve's Text\Capabilities\FileAssociations"; ValueType: string; ValueName: ".txt"; ValueData: "EvesText.txt"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Eve's Text\Capabilities\FileAssociations"; ValueType: string; ValueName: ".rtf"; ValueData: "EvesText.rtf"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Eve's Text"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "DanielUsov.EvesText"; Flags: uninsdeletekeyifempty
+
+; ProgID и команда открытия: настоящий .exe без параметров.
+Root: HKCR; Subkey: "EvesText.txt"; ValueType: string; ValueData: "Документ Eve's Text"; Flags: uninsdeletekeyifempty
+Root: HKCR; Subkey: "EvesText.txt\DefaultIcon"; ValueType: string; ValueData: "{app}\eves-text.ico,0"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "EvesText.txt\shell\open\command"; ValueType: string; ValueData: """{app}\Eve's Text.exe"" ""%1"""; Flags: uninsdeletekey
+Root: HKCR; Subkey: "EvesText.rtf"; ValueType: string; ValueData: "Форматированный документ Eve's Text"; Flags: uninsdeletekeyifempty
+Root: HKCR; Subkey: "EvesText.rtf\DefaultIcon"; ValueType: string; ValueData: "{app}\eves-text.ico,0"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "EvesText.rtf\shell\open\command"; ValueType: string; ValueData: """{app}\Eve's Text.exe"" ""%1"""; Flags: uninsdeletekey
+
+; Добавляем в список «Открыть с помощью», но не делаем приложение основным.
+Root: HKCR; Subkey: ".txt\OpenWithProgids"; ValueType: string; ValueName: "EvesText.txt"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCR; Subkey: ".rtf\OpenWithProgids"; ValueType: string; ValueName: "EvesText.rtf"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCR; Subkey: "Applications\Eve's Text.exe\shell\open\command"; ValueType: string; ValueData: """{app}\Eve's Text.exe"" ""%1"""; Flags: uninsdeletekey
+Root: HKCR; Subkey: "Applications\Eve's Text.exe"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "DanielUsov.EvesText"; Flags: uninsdeletekeyifempty
 
 [Run]
-Filename: "{app}\bin\pythonw.exe"; Parameters: """{app}\app\launcher.py"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall runasoriginaluser
+Filename: "{app}\Eve's Text.exe"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall runasoriginaluser

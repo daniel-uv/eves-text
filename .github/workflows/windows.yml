@@ -37,6 +37,7 @@ jobs:
           update: true
           cache: true
           install: >-
+            mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-python
             mingw-w64-ucrt-x86_64-python-gobject
             mingw-w64-ucrt-x86_64-gtk3
@@ -53,6 +54,17 @@ jobs:
 
       - name: Собрать переносимый бандл
         run: bash windows/build-portable.sh
+
+      - name: Проверить нативный лаунчер
+        shell: pwsh
+        run: |
+          $exe = "windows\dist\Eve's Text\Eve's Text.exe"
+          if (-not (Test-Path $exe)) { throw "Лаунчер не собран: $exe" }
+          $bytes = [IO.File]::ReadAllBytes($exe)
+          $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+          $subsystem = [BitConverter]::ToUInt16($bytes, $pe + 24 + 68)
+          if ($subsystem -ne 2) { throw "Лаунчер должен быть GUI-приложением, subsystem=$subsystem" }
+          Write-Host "GUI-лагер OK (subsystem=$subsystem)"
 
       - name: Проверить рантайм
         shell: pwsh

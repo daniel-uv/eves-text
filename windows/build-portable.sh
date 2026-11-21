@@ -139,6 +139,24 @@ find "$DIST/app" -name '*.pyc' -delete 2>/dev/null || true
 cp "$ROOT/windows/launcher.py" "$DIST/app/launcher.py"
 cp "$ROOT/windows/check_runtime.py" "$DIST/app/check_runtime.py"
 
+# --- Нативный GUI-лагер ---------------------------------------------------
+# Он нужен, чтобы Windows показывала Eve's Text в «Приложениях по умолчанию»
+# как обычную программу, а не как pythonw.exe с параметрами.
+CC="${CC:-$PREFIX/bin/gcc.exe}"
+if [ ! -x "$CC" ]; then
+    CC="$(command -v gcc || true)"
+fi
+if [ -z "$CC" ] || [ ! -x "$CC" ]; then
+    echo "Не найден GCC — нужен mingw-w64-ucrt-x86_64-gcc" >&2
+    exit 1
+fi
+"$CC" -municode -mwindows -O2 -s \
+    "$ROOT/windows/launcher.c" -o "$DIST/Eve's Text.exe" -lshell32
+if [ ! -f "$DIST/Eve's Text.exe" ]; then
+    echo "Лаунчер не собран" >&2
+    exit 1
+fi
+
 # --- Ярлыки и документы ---------------------------------------------------
 cp "$ROOT/windows/eves-text.vbs" "$DIST/Eve's Text.vbs"
 cp "$ROOT/windows/eves-text.bat" "$DIST/eves-text.bat"
