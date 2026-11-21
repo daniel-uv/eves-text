@@ -47,7 +47,7 @@ def rva_to_offset(data: bytes, rva: int) -> int:
 
 
 def entries(data: bytes, directory: int) -> list[tuple[int, int]]:
-    """Все записи директории: (identity, offset записи)."""
+    """Все записи IMAGE_RESOURCE_DIRECTORY: (ID/имя, смещение записи)."""
     count = u16(data, directory + 12) + u16(data, directory + 14)
     return [
         (u32(data, directory + 16 + index * 8), directory + 16 + index * 8)
@@ -55,8 +55,12 @@ def entries(data: bytes, directory: int) -> list[tuple[int, int]]:
     ]
 
 
-def child_directory(data: bytes, root: int, directory: int, wanted: int) -> int:
-    """Поддиректория по числовому ID. Смещения в PE — от начала ресурсов."""
+def subdirectory(data: bytes, root: int, directory: int, wanted: int) -> int:
+    """Поддиректория следующего уровня по числовому ID.
+
+    Смещения в записях resources считаются от начала блока ресурсов, а не
+    от текущей директории. Старший бит OffsetToData означает поддиректорию.
+    """
     for value, offset in entries(data, directory):
         if value & 0x80000000 == 0 and value == wanted:
             relative = u32(data, offset + 4) & 0x7FFFFFFF
@@ -65,21 +69,31 @@ def child_directory(data: bytes, root: int, directory: int, wanted: int) -> int:
     raise RuntimeError(f"ресурс с ID {wanted} не найден")
 
 
-def resource_data(data: bytes, root: int, name_directory: int) -> tuple[int, int]:
-    """RVA и размер данных для первой языковой записи ресурса."""
-    for _value, offset in entries(data, name_directory):
-        if u32(data, offset) & 0x80000000:
-            target = root + (u32(data, offset) & 0x7FFFFFFF)
-            return u32(data, target), u32(data, target + 4)
+def first_subdirectory(data: bytes, root: int, directory: int) -> int:
+    """Первая поддиректория (уровень языка) внутри директории имени."""
+    for _value, offset in entries(data, directory):
+        relative = u32(data, offset + 4)
+        if relative & 0x80000000 and (relative & 0x7FFFFFFF):
+            return root + (relative & 0x7FFFFFFF)
+    raise RuntimeError("у ресурса нет языковой директории")
+
+
+def data_entry(data: bytes, root: int, directory: int) -> tuple[int, int]:
+    """RVA и размер данных из языковой директории (уровень 3)."""
+    for _value, offset in entries(data, directory):
+        relative = u32(data, offset + 4)
+        if relative & 0x80000000 == 0 and relative:
+            entry = root + relative
+            return u32(data, entry), u32(data, entry + 4)
     raise RuntimeError("у ресурса нет языковых данных")
 
 
-def language_directory(data: bytes, root: int, name_directory: int) -> int:
-    for _value, offset in entries(data, name_directory):
-        relative = u32(data, offset + 4) & 0x7FFFFFFF
-        if relative:
-            return root + relative
-    raise RuntimeError("у ресурса нет языковой директории")
+def resource(data: bytes, root: int, type_id: int, name_id: int = 1) -> tuple[int, int]:
+    """Найти ресурс type_id/name_id: тип → имя → язык → данные."""
+    node = subdirectory(data, root, root, type_id)
+    node = subdirectory(data, root, node, name_id)
+    node = first_subdirectory(data, root, node)
+    return data_entry(data, root, node)
 
 
 def check(exe: Path) -> str:
@@ -90,11 +104,17 @@ def check(exe: Path) -> str:
     optional = pe + 24
     magic = u16(data, optional)
     if magic == 0x10B:
-        resource_entry = optional + 96
+        directories = optional + 96
+        count_field = optional + 92
     elif magic == 0x20B:
-        resource_entry = optional + 112
+        directories = optional + 112
+        count_field = optional + 108
     else:
         raise RuntimeError(f"неизвестный PE-заголовок 0x{magic:X}")
+    # IMAGE_DIRECTORY_ENTRY_RESOURCE — третья запись data directories.
+    if u32(data, count_field) <= 2:
+        raise RuntimeError("в PE нет таблицы ресурсов")
+    resource_entry = directories + 2 * 8
     resource_rva = u32(data, resource_entry)
     resource_size = u32(data, resource_entry + 4)
     if not resource_rva or not resource_size:
@@ -102,22 +122,17 @@ def check(exe: Path) -> str:
 
     root = rva_to_offset(data, resource_rva)
 
-    group_type = child_directory(data, root, root, RT_GROUP_ICON)
-    group_name = child_directory(data, root, group_type, 1)
-    group_language = language_directory(data, root, group_name)
-    group_rva, _ = resource_data(data, root, group_name)
+    group_rva, _ = resource(data, root, RT_GROUP_ICON)
     group_offset = rva_to_offset(data, group_rva)
     count = u16(data, group_offset + 4)
     if count < 1:
         raise RuntimeError("GRPICONDIR не содержит иконок")
-    # GRPICONDIRENTRY: 6 байт GRPICONDIR, затем 14 байт записи, из них
-    # nID (идентификатор RT_ICON) — последние 2 байта первой записи.
-    icon_id = u16(data, group_offset + 6 + 14)
+    # GRPICONDIRENTRY: 4 байта размера/цветов, wPlanes, wBitCount,
+    # dwBytesInRes и nID — 12-й байт записи. Сама запись идёт после
+    # 6-байтового GRPICONDIR.
+    icon_id = u16(data, group_offset + 6 + 12)
 
-    icon_type = child_directory(data, root, root, RT_ICON)
-    icon_name = child_directory(data, root, icon_type, icon_id)
-    icon_language = language_directory(data, root, icon_name)
-    _rva, size = resource_data(data, root, icon_name)
+    _rva, size = resource(data, root, RT_ICON, icon_id)
     if size < 16:
         raise RuntimeError(f"RT_ICON {icon_id} пуст или слишком мал")
     return f"встроено {count} иконок, основная RT_ICON {icon_id}, {size} байт"

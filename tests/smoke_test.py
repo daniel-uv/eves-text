@@ -327,6 +327,84 @@ def test_button_hover() -> None:
         assert "rgba(255, 255, 255" in declaration(selector), selector
 
 
+def test_check_icon_parser() -> None:
+    """Парсер PE-ресурсов должен находить иконку и в PE32, и в PE32+."""
+    import importlib.util
+    import struct
+
+    spec = importlib.util.spec_from_file_location(
+        "check_icon", ROOT / "windows" / "check_icon.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def resource_dir(
+        blob: bytearray, base: int, records: list[tuple[int, int, bool]]
+    ) -> None:
+        struct.pack_into("<IIHHHH", blob, base, 0, 0, 0, 0, 0, len(records))
+        for index, (name, offset, is_dir) in enumerate(records):
+            flag = 0x80000000 if is_dir else 0
+            struct.pack_into("<II", blob, base + 16 + index * 8, name, offset | flag)
+
+    def build_pe(pe32plus: bool) -> bytes:
+        pe = 0x80
+        coff = pe + 4
+        opt = coff + 20
+        opt_size = 240 if pe32plus else 224
+        section = opt + opt_size
+        res_rva, res_raw = 0x1000, 0x400
+        blob = bytearray(0x800)
+
+        def res(offset: int) -> int:
+            return res_raw + offset
+
+        struct.pack_into("<I", blob, 0x3C, pe)
+        blob[pe : pe + 4] = b"PE\0\0"
+        struct.pack_into(
+            "<HHIIIHH",
+            blob,
+            coff,
+            0x8664 if pe32plus else 0x14C,
+            1,
+            0,
+            0,
+            0,
+            opt_size,
+            0x2022,
+        )
+        struct.pack_into("<H", blob, opt, 0x20B if pe32plus else 0x10B)
+        struct.pack_into("<I", blob, opt + (108 if pe32plus else 92), 16)
+        directories = opt + (112 if pe32plus else 96)
+        struct.pack_into("<II", blob, directories + 16, res_rva, 0x400)
+        struct.pack_into("<IIII", blob, section + 8, 0x1000, res_rva, 0x400, res_raw)
+
+        # Дерево ресурсов: тип → имя → язык → IMAGE_RESOURCE_DATA_ENTRY.
+        resource_dir(blob, res(0x00), [(14, 0x50, True), (3, 0xD4, True)])
+        resource_dir(blob, res(0x50), [(1, 0x70, True)])
+        resource_dir(blob, res(0x70), [(0x409, 0x90, True)])
+        resource_dir(blob, res(0x90), [(0x409, 0xB0, False)])
+        struct.pack_into("<IIII", blob, res(0xB0), res_rva + 0x100, 20, 0, 0)
+        struct.pack_into("<HHH", blob, res(0x100), 0, 1, 1)
+        struct.pack_into(
+            "<BBBBHHIH", blob, res(0x106), 16, 16, 0, 0, 1, 32, 32, 7
+        )
+
+        resource_dir(blob, res(0xD4), [(7, 0xF4, True)])
+        resource_dir(blob, res(0xF4), [(1, 0x114, True)])
+        resource_dir(blob, res(0x114), [(0x409, 0x134, False)])
+        struct.pack_into("<IIII", blob, res(0x134), res_rva + 0x200, 32, 0, 0)
+        blob[res(0x200) : res(0x220)] = b"\x89PNG" + b"\0" * 28
+        return bytes(blob)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        for pe32plus in (True, False):
+            path = Path(tmp) / ("x64.exe" if pe32plus else "x86.exe")
+            path.write_bytes(build_pe(pe32plus))
+            detail = module.check(path)
+            assert "RT_ICON 7" in detail, detail
+
+
 def test_windows_installer() -> None:
     import ctypes
     from types import SimpleNamespace
@@ -1246,6 +1324,7 @@ if __name__ == "__main__":
     test_app_logo()
     test_dark_scheme()
     test_button_hover()
+    test_check_icon_parser()
     test_windows_installer()
     test_linux_installer()
     test_linux_restart()
