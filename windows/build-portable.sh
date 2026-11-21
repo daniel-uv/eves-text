@@ -150,8 +150,15 @@ if [ -z "$CC" ] || [ ! -x "$CC" ]; then
     echo "Не найден GCC — нужен mingw-w64-ucrt-x86_64-gcc" >&2
     exit 1
 fi
+# GCC на MSYS2 не всегда корректно обрабатывает апостроф в -o, поэтому
+# сначала собираем в ASCII-имя, затем переименовываем в нужное.
 "$CC" -municode -mwindows -O2 -s \
-    "$ROOT/windows/launcher.c" -o "$DIST/Eve's Text.exe" -lshell32
+    "$ROOT/windows/launcher.c" -o "$DIST/eves-text-launcher.exe" -lshell32
+if [ ! -f "$DIST/eves-text-launcher.exe" ]; then
+    echo "Лаунчер не собран" >&2
+    exit 1
+fi
+mv "$DIST/eves-text-launcher.exe" "$DIST/Eve's Text.exe"
 if [ ! -f "$DIST/Eve's Text.exe" ]; then
     echo "Лаунчер не собран" >&2
     exit 1
