@@ -421,6 +421,25 @@ def test_check_icon_parser() -> None:
                 detail = module.check(path)
                 assert "RT_ICON 7" in detail, detail
 
+                # В CI консоль Windows может быть с кодовой страницей 1252.
+                import subprocess
+
+                env = dict(os.environ, PYTHONIOENCODING="cp1252")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "windows" / "check_icon.py"),
+                        str(path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                )
+                assert result.returncode == 0, result.stderr
+                assert "RT_ICON 7" in result.stdout, result.stdout
+
 
 def test_windows_installer() -> None:
     import ctypes

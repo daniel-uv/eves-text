@@ -141,17 +141,27 @@ def check(exe: Path) -> str:
     return f"встроено {count} иконок, основная RT_ICON {icon_id}, {size} байт"
 
 
+def say(message: str, *, error: bool = False) -> None:
+    """Печатать даже кириллицу в консоли Windows с любой кодовой страницей."""
+    stream = sys.stderr if error else sys.stdout
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        print(message, file=stream)
+    else:
+        print(message.encode("ascii", "backslashreplace").decode("ascii"), file=stream)
+
+
 def main() -> int:
     if len(sys.argv) != 2:
-        print(__doc__.strip(), file=sys.stderr)
+        say(__doc__.strip(), error=True)
         return 1
     exe = Path(sys.argv[1])
     try:
         detail = check(exe)
     except (OSError, ValueError, struct.error, RuntimeError) as exc:
-        print(f"[ОШИБКА] {exe}: {exc}", file=sys.stderr)
+        say(f"[ОШИБКА] {exe}: {exc}", error=True)
         return 1
-    print(f"[OK] {exe}: {detail}")
+    say(f"[OK] {exe}: {detail}")
     return 0
 
 
