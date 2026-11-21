@@ -498,6 +498,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._font_size = DEFAULT_FONT_SIZE
         self._default_align = "left"
         self._format_guard = False
+        self._font_size_guard = False
         self._settings_dialog: Gtk.Dialog | None = None
         self._settings_pending = False
         self._settings_size_spin: FontSizeEntry | None = None
@@ -1252,18 +1253,22 @@ class MainWindow(Gtk.ApplicationWindow):
 
         # Плюс и минус стоят рядом, сразу за ними — поле с размером шрифта.
         font_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
-        self.font_larger = self._tool_button("zoom-in-symbolic", "Увеличить шрифт")
+        self.font_larger = self._tool_button(
+            "zoom-in-symbolic", "Увеличить шрифт выделенного текста"
+        )
         self.font_larger.connect("clicked", lambda *_: self._change_font_size(1))
         font_buttons.pack_start(self.font_larger, False, False, 0)
 
-        self.font_smaller = self._tool_button("zoom-out-symbolic", "Уменьшить шрифт")
+        self.font_smaller = self._tool_button(
+            "zoom-out-symbolic", "Уменьшить шрифт выделенного текста"
+        )
         self.font_smaller.connect("clicked", lambda *_: self._change_font_size(-1))
         font_buttons.pack_start(self.font_smaller, False, False, 0)
 
         content.pack_start(font_buttons, False, False, 0)
 
         self.font_size_spin = FontSizeEntry(self._font_size)
-        self.font_size_spin.set_tooltip_text("Размер шрифта")
+        self.font_size_spin.set_tooltip_text("Размер шрифта (меняет выделенный текст)")
         self.font_size_spin.connect("value-changed", self._on_font_size_changed)
         content.pack_start(self.font_size_spin, False, False, 0)
 
@@ -1271,24 +1276,13 @@ class MainWindow(Gtk.ApplicationWindow):
             Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4
         )
 
-        # Жирный и размер для отдельного куска текста.
+        # Жирный действует на выделение, размер — через общее поле выше.
         self.bold_button = Gtk.ToggleButton(label="Ж")
         self.bold_button.set_relief(Gtk.ReliefStyle.NONE)
         self.bold_button.get_style_context().add_class("format-button")
         self.bold_button.set_tooltip_text("Жирный (Ctrl+B)")
         self.bold_button.connect("toggled", self._on_bold_toggled)
         content.pack_start(self.bold_button, False, False, 0)
-
-        content.pack_start(Gtk.Label(label="Размер выделения:"), False, False, 0)
-        self.selection_size_spin = FontSizeEntry(self._font_size)
-        self.selection_size_spin.set_tooltip_text("Размер шрифта для выделенного текста")
-        content.pack_start(self.selection_size_spin, False, False, 0)
-        self.apply_size_button = Gtk.Button(label="Применить")
-        self.apply_size_button.set_relief(Gtk.ReliefStyle.NONE)
-        self.apply_size_button.get_style_context().add_class("format-button")
-        self.apply_size_button.set_tooltip_text("Применить размер к выделению")
-        self.apply_size_button.connect("clicked", self._on_apply_size)
-        content.pack_start(self.apply_size_button, False, False, 0)
 
         content.pack_start(
             Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4
@@ -1561,16 +1555,40 @@ class MainWindow(Gtk.ApplicationWindow):
     # ------------------------------------------------------------- formatting
 
     def _change_font_size(self, delta: int) -> None:
+        # Кнопки меняют только значение поля; само оформление применяется
+        # в _on_font_size_changed и только к выделенному тексту.
         self.font_size_spin.set_value(self.font_size_spin.get_value() + delta)
         self.view.grab_focus()
 
+    def _apply_size_to_selection(self, size: int) -> None:
+        """Применить размер только к выделенному тексту."""
+        tab = self._active_tab
+        if tab is None or not tab.buffer.get_has_selection():
+            return
+        buffer = tab.buffer
+        start, end = buffer.get_selection_bounds()
+        buffer.begin_user_action()
+        try:
+            for old_size, old_tag in list(tab.size_tags.items()):
+                if old_size != size:
+                    buffer.remove_tag(old_tag, start, end)
+            buffer.apply_tag(self._get_size_tag(tab, size), start, end)
+        finally:
+            buffer.end_user_action()
+        self._refresh_formatted(tab)
+
     def _on_font_size_changed(self, spin: FontSizeEntry) -> None:
-        self._font_size = int(spin.get_value())
-        font = Pango.FontDescription.from_string(
-            f"{default_font_family()} {self._font_size}"
-        )
-        for tab in self._tabs:
-            tab.view.modify_font(font)
+        if self._font_size_guard:
+            return
+        size = int(spin.get_value())
+        tab = self._active_tab
+        if tab is not None and tab.buffer.get_has_selection():
+            # Есть выделение — меняем только его, остальной текст не трогаем.
+            self._apply_size_to_selection(size)
+        elif tab is not None:
+            # Без выделения размер действует лишь на последующий ввод.
+            tab.active_size = size
+        self._update_format_controls()
 
     def _on_alignment_toggled(self, button: Gtk.ToggleButton, key: str) -> None:
         if self._align_guard:
@@ -1650,8 +1668,8 @@ class MainWindow(Gtk.ApplicationWindow):
         start = buffer.get_iter_at_offset(start_offset)
         end = buffer.get_iter_at_offset(end_offset)
 
-        # Жирный и размер, включённые для выделения, должны действовать
-        # и на текст, который придёт на место выделения.
+        # Жирный и размер, заданные для выделения, должны действовать и на
+        # текст, который придёт на место выделения.
         if tab.bold_typing:
             buffer.apply_tag(tab.bold_tag, start, end)
         if tab.active_size is not None:
@@ -2072,12 +2090,19 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         for tab in self._tabs:
             tab.view.modify_font(font)
+            tab.active_size = None
             tab.buffer.begin_user_action()
             try:
                 self._retag_alignment(tab, align)
             finally:
                 tab.buffer.end_user_action()
-        self.font_size_spin.set_value(self._font_size)
+        # Это программная установка значения из настроек, а не действие
+        # пользователя над выделением — оформление применять не нужно.
+        self._font_size_guard = True
+        try:
+            self.font_size_spin.set_value(self._font_size)
+        finally:
+            self._font_size_guard = False
         self._set_alignment_buttons(align)
 
         config = user_settings.load()
@@ -3408,24 +3433,6 @@ class MainWindow(Gtk.ApplicationWindow):
             return
         self.action_bold()
 
-    def _on_apply_size(self, *_args) -> None:
-        tab = self._active_tab
-        if tab is None:
-            return
-        buffer = tab.buffer
-        if not buffer.get_has_selection():
-            self._set_status("Выделите текст, чтобы задать ему размер")
-            return
-        size = int(self.selection_size_spin.get_value())
-        start, end = buffer.get_selection_bounds()
-        for old_size, old_tag in list(tab.size_tags.items()):
-            if old_size != size:
-                buffer.remove_tag(old_tag, start, end)
-        buffer.apply_tag(self._get_size_tag(tab, size), start, end)
-        tab.active_size = size
-        self._refresh_formatted(tab)
-        self._update_format_controls()
-
     def _refresh_formatted(self, tab: DocumentTab) -> None:
         tab.formatted = bool(self._collect_spans(tab))
 
@@ -3498,17 +3505,30 @@ class MainWindow(Gtk.ApplicationWindow):
         else:
             iterator = buffer.get_iter_at_mark(buffer.get_insert())
             bold = tab.bold_typing or iterator.has_tag(tab.bold_tag)
-        size = tab.active_size
-        for value, tag in tab.size_tags.items():
-            if iterator.has_tag(tag):
-                size = value
-                break
+        if buffer.get_has_selection():
+            # Для выделения показываем его текущий размер, а не отложенный.
+            size = None
+            for value, tag in tab.size_tags.items():
+                if iterator.has_tag(tag):
+                    size = value
+                    break
+        else:
+            # Без выделения поле отражает размер для следующего ввода.
+            size = tab.active_size
+            if size is None:
+                for value, tag in tab.size_tags.items():
+                    if iterator.has_tag(tag):
+                        size = value
+                        break
+        if size is None:
+            size = self._font_size
         self._format_guard = True
+        self._font_size_guard = True
         try:
             self.bold_button.set_active(bool(bold))
-            if size is not None:
-                self.selection_size_spin.set_value(size)
+            self.font_size_spin.set_value(size)
         finally:
+            self._font_size_guard = False
             self._format_guard = False
 
     def action_quit(self, *_args) -> None:

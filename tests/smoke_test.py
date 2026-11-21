@@ -824,15 +824,42 @@ def test_formatting(app: Application) -> None:
             assert not buffer.get_iter_at_offset(8).has_tag(tab.bold_tag)
             assert window.bold_button.get_active() is True
 
-            # Размер применяется только к выделенному куску.
-            window.selection_size_spin.set_value(18)
+            # Без выделения плюс/минус не меняют весь документ.
+            buffer.place_cursor(buffer.get_iter_at_offset(0))
+            font_before = window.view.get_style_context().get_property(
+                "font", Gtk.StateFlags.NORMAL
+            ).get_size()
+            window._change_font_size(1)
+            font_after = window.view.get_style_context().get_property(
+                "font", Gtk.StateFlags.NORMAL
+            ).get_size()
+            assert font_after == font_before, (font_before, font_after)
+            assert not any(
+                list(window._tag_ranges(buffer, tag))
+                for tag in tab.size_tags.values()
+            )
+            window.font_size_spin.set_value(window._font_size)
+            tab.active_size = None
+
+            # Одно общее поле меняет размер только у выделенного текста.
             buffer.select_range(
                 buffer.get_iter_at_offset(7), buffer.get_iter_at_offset(16)
             )
-            window._on_apply_size()
+            window.font_size_spin.set_value(18)
             tag_18 = tab.size_tags[18]
             assert buffer.get_iter_at_offset(8).has_tag(tag_18)
             assert not buffer.get_iter_at_offset(1).has_tag(tag_18)
+
+            # Курсор внутри оформленного куска: плюс меняет только значение
+            # поля для следующего ввода, но не само оформление.
+            buffer.place_cursor(buffer.get_iter_at_offset(8))
+            window._change_font_size(1)
+            assert window.font_size_spin.get_value() == 19
+            assert tab.active_size == 19
+            assert buffer.get_iter_at_offset(8).has_tag(tag_18)
+            window.font_size_spin.set_value(18)
+            tab.active_size = None
+            buffer.place_cursor(buffer.get_iter_at_offset(0))
 
             spans = window._collect_spans(tab)
             assert any(values.get("bold") for _a, _b, values in spans), spans
