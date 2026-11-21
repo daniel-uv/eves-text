@@ -65,15 +65,21 @@ def text_stats(text: str) -> tuple[int, int, int]:
 # Оформление: RTF
 #
 # Обычные .txt остаются чистым текстом. Как только в документе появляется
-# жирный шрифт или размер для части текста, файл сохраняется как RTF — это
+# начертание или размер для части текста, файл сохраняется как RTF — это
 # один файл, который понимают Word, Writer и Windows Notepad. Поддерживается
-# небольшое подмножество RTF: \b, \fs, выравнивание и Unicode- escape-ы.
+# небольшое подмножество RTF: \b, \i, \ul, \fs, выравнивание и Unicode-escape-ы.
 
-# (начало, конец, атрибуты) — атрибуты: bold, size (пункты), align.
+# (начало, конец, атрибуты) — атрибуты: bold, italic, underline, size, align.
 Span = tuple[int, int, dict[str, object]]
 _ALIGN_CONTROLS = {"left": r"\ql", "center": r"\qc", "right": r"\qr", "justify": r"\qj"}
 _CONTROL_RE = re.compile(r"([a-zA-Z]+)(-?\d+)?")
-_DEFAULT_ATTRS: dict[str, object] = {"bold": False, "size": None, "align": None}
+_DEFAULT_ATTRS: dict[str, object] = {
+    "bold": False,
+    "italic": False,
+    "underline": False,
+    "size": None,
+    "align": None,
+}
 # Служебные группы RTF: их содержимое не является текстом документа.
 _IGNORED_DESTINATIONS = {
     "fonttbl",
@@ -107,7 +113,7 @@ def read_document(path: str | os.PathLike) -> tuple[str, str, list[Span]]:
     """Прочитать документ вместе с оформлением.
 
     Возвращает (текст, кодировка, оформление). Для обычного текста список
-    оформления пуст; для RTF он содержит диапазоны с жирным/размером/выравниванием.
+    оформления пуст; для RTF он содержит диапазоны с начертанием/размером/выравниванием.
     """
     file = Path(path)
     if file.suffix.lower() == ".rtf":
@@ -201,6 +207,10 @@ def _parse_rtf(source: str) -> tuple[str, list[Span]]:
                     skip = uc
                 elif word == "b":
                     state["bold"] = (param if param is not None else 1) != 0
+                elif word == "i":
+                    state["italic"] = (param if param is not None else 1) != 0
+                elif word == "ul":
+                    state["underline"] = (param if param is not None else 1) != 0
                 elif word == "fs" and param is not None:
                     state["size"] = max(1, round(param / 2))
                 elif word in _ALIGN_CONTROLS.values():
@@ -260,6 +270,8 @@ def has_visual_formatting(attrs: dict[str, object]) -> bool:
     """Есть ли в атрибутах оформление, которое нельзя потерять в .txt."""
     return bool(
         attrs.get("bold")
+        or attrs.get("italic")
+        or attrs.get("underline")
         or attrs.get("size")
         or attrs.get("align") not in (None, "left", "")
     )
@@ -297,6 +309,8 @@ def _build_rtf(text: str, spans: list[Span], default_size: int) -> bytes:
     size_default = int(default_size)
     default: dict[str, object] = {
         "bold": False,
+        "italic": False,
+        "underline": False,
         "size": size_default,
         "align": "left",
     }
@@ -310,6 +324,14 @@ def _build_rtf(text: str, spans: list[Span], default_size: int) -> bytes:
         if bold != current["bold"]:
             parts.append(r"\b" if bold else r"\b0")
             current["bold"] = bold
+        italic = bool(target["italic"])
+        if italic != current["italic"]:
+            parts.append(r"\i" if italic else r"\i0")
+            current["italic"] = italic
+        underline = bool(target["underline"])
+        if underline != current["underline"]:
+            parts.append(r"\ul" if underline else r"\ul0")
+            current["underline"] = underline
         if size != current["size"]:
             parts.append(f"\\fs{size * 2}")
             current["size"] = size
@@ -328,6 +350,8 @@ def _build_rtf(text: str, spans: list[Span], default_size: int) -> bytes:
             position = start
         target = {
             "bold": bool(attrs.get("bold")),
+            "italic": bool(attrs.get("italic")),
+            "underline": bool(attrs.get("underline")),
             "size": attrs.get("size") or size_default,
             "align": attrs.get("align") or "left",
         }

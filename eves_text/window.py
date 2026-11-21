@@ -47,9 +47,12 @@ ALIGNMENTS: tuple[tuple[str, str, Gtk.Justification, str], ...] = (
 
 DEFAULT_FONT_SIZE = 12
 
-# Тег жирного шрифта и префикс тегов размера для отдельных кусков текста.
+# Теги начертаний и префикс тегов размера для отдельных кусков текста.
 BOLD_TAG = "format-bold"
+ITALIC_TAG = "format-italic"
+UNDERLINE_TAG = "format-underline"
 SIZE_TAG_PREFIX = "format-size:"
+TEXT_FORMAT_KEYS = ("bold", "italic", "underline")
 
 # Класс, который ставим на кнопку вручную: в GTK3 псевдокласс :hover
 # не всегда применяется (например, в Windows-бандле), поэтому подсветку
@@ -194,13 +197,21 @@ class DocumentTab:
             for key, _icon, alignment, _tip in ALIGNMENTS
         }
 
-        # Оформление отдельного текста: жирный и размер для выделения.
+        # Оформление отдельного текста: начертания и размер для выделения.
         self.bold_tag = self.buffer.create_tag(
             BOLD_TAG, weight=Pango.Weight.BOLD, weight_set=True
+        )
+        self.italic_tag = self.buffer.create_tag(
+            ITALIC_TAG, style=Pango.Style.ITALIC, style_set=True
+        )
+        self.underline_tag = self.buffer.create_tag(
+            UNDERLINE_TAG, underline=Pango.Underline.SINGLE
         )
         self.size_tags: dict[int, Gtk.TextTag] = {}
         self.formatted = False
         self.bold_typing = False
+        self.italic_typing = False
+        self.underline_typing = False
         self.active_size: int | None = None
 
         # Проверка орфографии делается своим слоем на текстовых тегах.
@@ -1276,18 +1287,24 @@ class MainWindow(Gtk.ApplicationWindow):
             Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4
         )
 
-        # Жирный действует на выделение, размер — через общее поле выше.
-        self.bold_button = Gtk.ToggleButton(label="Ж")
-        self.bold_button.set_relief(Gtk.ReliefStyle.NONE)
-        self.bold_button.get_style_context().add_class("format-button")
-        self.bold_button.set_tooltip_text("Жирный (Ctrl+B)")
-        self.bold_button.connect("toggled", self._on_bold_toggled)
-        content.pack_start(self.bold_button, False, False, 0)
+        # Три начертания — отдельные кнопки; буква сама показывает действие.
+        format_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self.bold_button = self._format_toggle(
+            "B", "<b>B</b>", "Жирный (Ctrl+B)", "bold"
+        )
+        self.italic_button = self._format_toggle(
+            "I", "<i>I</i>", "Наклонный (Ctrl+I)", "italic"
+        )
+        self.underline_button = self._format_toggle(
+            "U", "<u>U</u>", "Подчёркнутый (Ctrl+U)", "underline"
+        )
+        for button in (self.bold_button, self.italic_button, self.underline_button):
+            format_buttons.pack_start(button, False, False, 0)
+        content.pack_start(format_buttons, False, False, 0)
 
         content.pack_start(
             Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4
         )
-        content.pack_start(Gtk.Label(label="Выравнивание:"), False, False, 0)
 
         self.align_buttons: dict[str, Gtk.ToggleButton] = {}
         for key, icon, _alignment, tooltip in ALIGNMENTS:
@@ -1321,6 +1338,20 @@ class MainWindow(Gtk.ApplicationWindow):
         button.set_relief(Gtk.ReliefStyle.NONE)
         button.set_image(Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.SMALL_TOOLBAR))
         button.set_tooltip_text(tooltip)
+        return button
+
+    def _format_toggle(
+        self, letter: str, markup: str, tooltip: str, key: str
+    ) -> Gtk.ToggleButton:
+        """Кнопка начертания: буква сразу показывает, что она делает."""
+        button = Gtk.ToggleButton(label=letter)
+        child = button.get_child()
+        if isinstance(child, Gtk.Label):
+            child.set_markup(markup)
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.get_style_context().add_class("format-button")
+        button.set_tooltip_text(tooltip)
+        button.connect("toggled", self._on_format_toggled, key)
         return button
 
     def _build_menubar(self) -> Gtk.MenuBar:
@@ -1470,6 +1501,8 @@ class MainWindow(Gtk.ApplicationWindow):
             ("save", self.action_save, ["<Primary>s"]),
             ("save-as", self.action_save_as, ["<Primary><Shift>s"]),
             ("bold", self.action_bold, ["<Primary>b"]),
+            ("italic", self.action_italic, ["<Primary>i"]),
+            ("underline", self.action_underline, ["<Primary>u"]),
             ("undo", self.action_undo, ["<Primary>z"]),
             ("redo", self.action_redo, ["<Primary><Shift>z", "<Primary>y"]),
             ("cut", self.action_cut, ["<Primary>x"]),
@@ -1668,10 +1701,11 @@ class MainWindow(Gtk.ApplicationWindow):
         start = buffer.get_iter_at_offset(start_offset)
         end = buffer.get_iter_at_offset(end_offset)
 
-        # Жирный и размер, заданные для выделения, должны действовать и на
-        # текст, который придёт на место выделения.
-        if tab.bold_typing:
-            buffer.apply_tag(tab.bold_tag, start, end)
+        # Оформление, включённое для выделения, должно действовать и на текст,
+        # который придёт на место выделения.
+        for key in TEXT_FORMAT_KEYS:
+            if getattr(tab, f"{key}_typing"):
+                buffer.apply_tag(self._format_tag(tab, key), start, end)
         if tab.active_size is not None:
             buffer.apply_tag(self._get_size_tag(tab, tab.active_size), start, end)
         if not text:
@@ -2091,6 +2125,8 @@ class MainWindow(Gtk.ApplicationWindow):
         for tab in self._tabs:
             tab.view.modify_font(font)
             tab.active_size = None
+            for key in TEXT_FORMAT_KEYS:
+                setattr(tab, f"{key}_typing", False)
             tab.buffer.begin_user_action()
             try:
                 self._retag_alignment(tab, align)
@@ -3188,11 +3224,13 @@ class MainWindow(Gtk.ApplicationWindow):
                 self._apply_spans(tab, spans)
             else:
                 self._retag_alignment(tab, self._default_align)
-                bold_spans = [
-                    span for span in spans if span[2].get("bold") or span[2].get("size")
+                format_spans = [
+                    span
+                    for span in spans
+                    if any(span[2].get(key) for key in (*TEXT_FORMAT_KEYS, "size"))
                 ]
-                if bold_spans:
-                    self._apply_spans(tab, bold_spans)
+                if format_spans:
+                    self._apply_spans(tab, format_spans)
         finally:
             try:
                 tab.buffer.end_not_undoable_action()
@@ -3200,7 +3238,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 pass
         if not spans:
             tab.formatted = False
-            tab.bold_typing = False
+            for key in TEXT_FORMAT_KEYS:
+                setattr(tab, f"{key}_typing", False)
             tab.active_size = None
         tab.buffer.set_modified(False)
         tab.path = Path(path) if path is not None else None
@@ -3383,6 +3422,11 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ------------------------------------------------------------- оформление
 
+    @staticmethod
+    def _format_tag(tab: DocumentTab, key: str) -> Gtk.TextTag:
+        """Текстовый тег для жирного, наклонного или подчёркнутого."""
+        return getattr(tab, f"{key}_tag")
+
     def _get_size_tag(self, tab: DocumentTab, size: int) -> Gtk.TextTag:
         size = int(size)
         tag = tab.size_tags.get(size)
@@ -3407,31 +3451,42 @@ class MainWindow(Gtk.ApplicationWindow):
             elif not iterator.forward_to_tag_toggle(tag):
                 return
 
-    def action_bold(self, *_args) -> None:
-        """Включить/выключить жирный для выделения или для следующего ввода."""
+    def _toggle_format(self, key: str) -> None:
+        """Включить/выключить начертание для выделения или следующего ввода."""
         tab = self._active_tab
         if tab is None:
             return
         buffer = tab.buffer
+        tag = self._format_tag(tab, key)
+        flag = f"{key}_typing"
         if buffer.get_has_selection():
             start, end = buffer.get_selection_bounds()
-            if start.has_tag(tab.bold_tag):
-                buffer.remove_tag(tab.bold_tag, start, end)
-                tab.bold_typing = False
+            if start.has_tag(tag):
+                buffer.remove_tag(tag, start, end)
+                setattr(tab, flag, False)
             else:
-                buffer.apply_tag(tab.bold_tag, start, end)
-                tab.bold_typing = True
+                buffer.apply_tag(tag, start, end)
+                setattr(tab, flag, True)
         else:
             iterator = buffer.get_iter_at_mark(buffer.get_insert())
-            current = tab.bold_typing or iterator.has_tag(tab.bold_tag)
-            tab.bold_typing = not current
+            current = getattr(tab, flag) or iterator.has_tag(tag)
+            setattr(tab, flag, not current)
         self._refresh_formatted(tab)
         self._update_format_controls()
 
-    def _on_bold_toggled(self, *_args) -> None:
+    def action_bold(self, *_args) -> None:
+        self._toggle_format("bold")
+
+    def action_italic(self, *_args) -> None:
+        self._toggle_format("italic")
+
+    def action_underline(self, *_args) -> None:
+        self._toggle_format("underline")
+
+    def _on_format_toggled(self, _button: Gtk.ToggleButton, key: str) -> None:
         if self._format_guard:
             return
-        self.action_bold()
+        self._toggle_format(key)
 
     def _refresh_formatted(self, tab: DocumentTab) -> None:
         tab.formatted = bool(self._collect_spans(tab))
@@ -3448,9 +3503,10 @@ class MainWindow(Gtk.ApplicationWindow):
         def change(offset: int, key: str, value: object) -> None:
             changes.setdefault(offset, {})[key] = value
 
-        for first, last in self._tag_ranges(buffer, tab.bold_tag):
-            change(first, "bold", True)
-            change(last, "bold", False)
+        for key in TEXT_FORMAT_KEYS:
+            for first, last in self._tag_ranges(buffer, self._format_tag(tab, key)):
+                change(first, key, True)
+                change(last, key, False)
         for size, tag in tab.size_tags.items():
             for first, last in self._tag_ranges(buffer, tag):
                 change(first, "size", size)
@@ -3463,7 +3519,8 @@ class MainWindow(Gtk.ApplicationWindow):
             change(offset, "align", key or "left")
             offset += len(line)
 
-        attrs: dict[str, object] = {"bold": False, "size": None, "align": "left"}
+        attrs: dict[str, object] = {key: False for key in TEXT_FORMAT_KEYS}
+        attrs.update({"size": None, "align": "left"})
         spans: list[document.Span] = []
         span_start = 0
         for position in sorted(changes):
@@ -3484,8 +3541,9 @@ class MainWindow(Gtk.ApplicationWindow):
         for first, last, values in spans:
             start = buffer.get_iter_at_offset(first)
             end = buffer.get_iter_at_offset(last)
-            if values.get("bold"):
-                buffer.apply_tag(tab.bold_tag, start, end)
+            for key in TEXT_FORMAT_KEYS:
+                if values.get(key):
+                    buffer.apply_tag(self._format_tag(tab, key), start, end)
             size = values.get("size")
             if isinstance(size, int):
                 buffer.apply_tag(self._get_size_tag(tab, size), start, end)
@@ -3501,10 +3559,17 @@ class MainWindow(Gtk.ApplicationWindow):
         buffer = tab.buffer
         if buffer.get_has_selection():
             iterator, _end = buffer.get_selection_bounds()
-            bold = iterator.has_tag(tab.bold_tag)
+            active = {
+                key: iterator.has_tag(self._format_tag(tab, key))
+                for key in TEXT_FORMAT_KEYS
+            }
         else:
             iterator = buffer.get_iter_at_mark(buffer.get_insert())
-            bold = tab.bold_typing or iterator.has_tag(tab.bold_tag)
+            active = {
+                key: getattr(tab, f"{key}_typing")
+                or iterator.has_tag(self._format_tag(tab, key))
+                for key in TEXT_FORMAT_KEYS
+            }
         if buffer.get_has_selection():
             # Для выделения показываем его текущий размер, а не отложенный.
             size = None
@@ -3525,7 +3590,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self._format_guard = True
         self._font_size_guard = True
         try:
-            self.bold_button.set_active(bool(bold))
+            self.bold_button.set_active(bool(active["bold"]))
+            self.italic_button.set_active(bool(active["italic"]))
+            self.underline_button.set_active(bool(active["underline"]))
             self.font_size_spin.set_value(size)
         finally:
             self._font_size_guard = False

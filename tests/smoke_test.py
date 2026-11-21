@@ -50,10 +50,11 @@ def test_document() -> None:
 def test_document_rtf() -> None:
     """Оформление живёт в RTF, обычный текст остаётся чистым."""
     with tempfile.TemporaryDirectory() as tmp:
-        text = "Обычный текст. Жирный кусок и 18-й размер. Ещё строка."
+        text = "Обычный текст. Жирный кусок и 18-й размер. Ещё строка. Наклон и линия."
         spans = [
             (15, 28, {"bold": True, "align": "left"}),
             (33, 50, {"size": 18, "align": "left"}),
+            (55, 70, {"italic": True, "underline": True, "align": "left"}),
         ]
         path = Path(tmp) / "оформление.rtf"
         document.write_document(path, text, spans, default_size=12)
@@ -63,12 +64,18 @@ def test_document_rtf() -> None:
         assert encoding == "RTF", encoding
         bold = [span for span in loaded_spans if span[2].get("bold")]
         sized = [span for span in loaded_spans if span[2].get("size") == 18]
+        italic = [span for span in loaded_spans if span[2].get("italic")]
+        underline = [span for span in loaded_spans if span[2].get("underline")]
         assert any(span[0] <= 15 and span[1] >= 28 for span in bold), loaded_spans
         assert any(span[0] <= 33 and span[1] >= 50 for span in sized), loaded_spans
+        assert any(span[0] <= 55 and span[1] >= 70 for span in italic), loaded_spans
+        assert any(span[0] <= 55 and span[1] >= 70 for span in underline), loaded_spans
 
         # Текст между кусками не должен стать жирным или крупным.
         middle = next(span for span in loaded_spans if span[0] <= 30 < span[1])
         assert not middle[2].get("bold"), middle
+        assert not middle[2].get("italic"), middle
+        assert not middle[2].get("underline"), middle
         assert middle[2].get("size") != 18, middle
 
         plain = Path(tmp) / "обычный.txt"
@@ -799,7 +806,7 @@ def test_window() -> Application:
 
 
 def test_formatting(app: Application) -> None:
-    """Жирный, размер куска текста и drop файлов работают в окне."""
+    """Начертания, размер куска текста и drop файлов работают в окне."""
     from eves_text import settings as user_settings
 
     original_load = user_settings.load
@@ -810,6 +817,25 @@ def test_formatting(app: Application) -> None:
     try:
         window = MainWindow(application=app)
         try:
+            # Кнопки подписывает само начертание; лишней подписи нет.
+            assert window.bold_button.get_label() == "B"
+            assert window.italic_button.get_label() == "I"
+            assert window.underline_button.get_label() == "U"
+            assert "<b>B</b>" in window.bold_button.get_child().get_label()
+            assert "<i>I</i>" in window.italic_button.get_child().get_label()
+            assert "<u>U</u>" in window.underline_button.get_child().get_label()
+
+            def label_texts(widget) -> list[str]:
+                found: list[str] = []
+                if isinstance(widget, Gtk.Label):
+                    found.append(widget.get_text())
+                if hasattr(widget, "get_children"):
+                    for child in widget.get_children():
+                        found.extend(label_texts(child))
+                return found
+
+            assert "Выравнивание:" not in label_texts(window.bottom_bar_content)
+
             text = "Жирный и обычный"
             window.set_text(text, Path("/tmp/формат.txt"))
             tab = window._active_tab
@@ -823,6 +849,14 @@ def test_formatting(app: Application) -> None:
             assert buffer.get_iter_at_offset(1).has_tag(tab.bold_tag)
             assert not buffer.get_iter_at_offset(8).has_tag(tab.bold_tag)
             assert window.bold_button.get_active() is True
+
+            window.action_italic()
+            window.action_underline()
+            assert buffer.get_iter_at_offset(1).has_tag(tab.italic_tag)
+            assert buffer.get_iter_at_offset(1).has_tag(tab.underline_tag)
+            assert not buffer.get_iter_at_offset(8).has_tag(tab.italic_tag)
+            assert window.italic_button.get_active() is True
+            assert window.underline_button.get_active() is True
 
             # Без выделения плюс/минус не меняют весь документ.
             buffer.place_cursor(buffer.get_iter_at_offset(0))
@@ -863,6 +897,8 @@ def test_formatting(app: Application) -> None:
 
             spans = window._collect_spans(tab)
             assert any(values.get("bold") for _a, _b, values in spans), spans
+            assert any(values.get("italic") for _a, _b, values in spans), spans
+            assert any(values.get("underline") for _a, _b, values in spans), spans
             assert any(values.get("size") == 18 for _a, _b, values in spans), spans
             assert window._has_rtf_content(tab)
 
@@ -875,7 +911,24 @@ def test_formatting(app: Application) -> None:
                 assert loaded == text, repr(loaded)
                 assert encoding == "RTF"
                 assert any(values.get("bold") for _a, _b, values in loaded_spans)
+                assert any(values.get("italic") for _a, _b, values in loaded_spans)
+                assert any(values.get("underline") for _a, _b, values in loaded_spans)
                 assert any(values.get("size") == 18 for _a, _b, values in loaded_spans)
+
+                # Загруженный RTF восстанавливает начертания в буфере.
+                window.action_new()
+                reloaded = window._active_tab
+                assert reloaded is not None
+                window._load_tab_text(reloaded, loaded, rtf, "RTF", loaded_spans)
+                assert reloaded.buffer.get_iter_at_offset(1).has_tag(
+                    reloaded.bold_tag
+                )
+                assert reloaded.buffer.get_iter_at_offset(1).has_tag(
+                    reloaded.italic_tag
+                )
+                assert reloaded.buffer.get_iter_at_offset(1).has_tag(
+                    reloaded.underline_tag
+                )
 
                 # Файл без оформления остаётся обычным текстом.
                 window.action_new()
@@ -897,16 +950,20 @@ def test_formatting(app: Application) -> None:
                 assert len(window._tabs) == before + 1
                 assert window.get_text() == "Текст из брошенного файла"
 
-            # Ввод после включения жирного продолжает оформление.
+            # Ввод после включения начертаний продолжает оформление.
             window.action_new()
             typing = window._active_tab
             assert typing is not None
             window.set_text("")
             typing = window._active_tab
             typing.bold_typing = True
+            typing.italic_typing = True
+            typing.underline_typing = True
             position = window.buffer.get_end_iter()
             window.buffer.insert(position, "новый")
             assert window.buffer.get_iter_at_offset(1).has_tag(typing.bold_tag)
+            assert window.buffer.get_iter_at_offset(1).has_tag(typing.italic_tag)
+            assert window.buffer.get_iter_at_offset(1).has_tag(typing.underline_tag)
         finally:
             window.destroy()
     finally:
