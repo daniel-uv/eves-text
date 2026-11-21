@@ -154,6 +154,7 @@ fi
 # в windows/ (без апострофа) и только потом кладём exe в папку приложения.
 TMP_EXE="$ROOT/windows/eves-text-launcher.exe"
 RES_OBJ="$ROOT/windows/launcher.res"
+RES_RC="$ROOT/windows/launcher.generated.rc"
 WINDRES="${WINDRES:-$PREFIX/bin/windres.exe}"
 if [ ! -x "$WINDRES" ]; then
     WINDRES="$(command -v windres || true)"
@@ -163,15 +164,17 @@ if [ -z "$WINDRES" ] || [ ! -x "$WINDRES" ]; then
     exit 1
 fi
 # Иконка .exe берётся из launcher.rc. Без неё Windows показывает универсальную
-# иконку исполняемого файла в Проводнике и на панели задач.
+# иконку исполняемого файла в Проводнике и на панели задач. windres не всегда
+# раскрывает макросы в VERSIONINFO, поэтому версию подставляем текстом.
 VERSION_COMMA="$(printf '%s' "$VERSION" | awk -F. '{printf "%d,%d,%d,0", $1, $2, $3}')"
+sed -e "s|@VERSION@|$VERSION|g" \
+    -e "s|@VERSION_COMMA@|$VERSION_COMMA|g" \
+    "$ROOT/windows/launcher.rc" > "$RES_RC"
 (
     cd "$ROOT/windows"
-    "$WINDRES" -O coff \
-        -DAPP_VERSION="\"$VERSION\"" \
-        -DAPP_VERSION_COMMA="$VERSION_COMMA" \
-        launcher.rc launcher.res
+    "$WINDRES" -O coff launcher.generated.rc launcher.res
 )
+rm -f "$RES_RC"
 if [ ! -f "$RES_OBJ" ]; then
     echo "Ресурсы лаунчера не собраны" >&2
     exit 1

@@ -6,3 +6,5 @@ dist/
 *.deb
 windows/dist/
 windows/dist-installer/
+windows/launcher.generated.rc
+windows/launcher.res

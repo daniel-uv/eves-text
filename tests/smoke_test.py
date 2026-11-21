@@ -415,11 +415,13 @@ def test_windows_installer() -> None:
     rc = (ROOT / "windows" / "launcher.rc").read_text(encoding="utf-8")
     assert '1 ICON "assets\\\\eves-text.ico"' in rc
     assert "VERSIONINFO" in rc
+    assert "@VERSION@" in rc and "@VERSION_COMMA@" in rc
 
     build = (ROOT / "windows" / "build-portable.sh").read_text(encoding="utf-8")
     assert "launcher.c" in build and "Eve's Text.exe" in build
     assert "-mwindows" in build
     assert "windres" in build and "launcher.rc" in build
+    assert "launcher.generated.rc" in build
     assert (ROOT / "windows" / "assets" / "eves-text.ico").is_file()
 
     check_icon = (ROOT / "windows" / "check_icon.py").read_text(encoding="utf-8")

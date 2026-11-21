@@ -1,21 +1,17 @@
-/* Ресурсы нативного лаунчера Eve's Text. */
+/* Шаблон ресурсов нативного лаунчера Eve's Text.
+ * Перед сборкой build-portable.sh подставляет @VERSION@ и @VERSION_COMMA@
+ * и передаёт windres получившийся launcher.generated.rc.
+ */
 
 #include <winver.h>
-
-#ifndef APP_VERSION
-#define APP_VERSION "0.0.0"
-#endif
-#ifndef APP_VERSION_COMMA
-#define APP_VERSION_COMMA 0,0,0,0
-#endif
 
 /* ICON 1 — первая иконка в RT_GROUP_ICON; именно её Windows показывает
    в Проводнике и на панели задач для Eve's Text.exe. */
 1 ICON "assets\\eves-text.ico"
 
 1 VERSIONINFO
-  FILEVERSION    APP_VERSION_COMMA
-  PRODUCTVERSION APP_VERSION_COMMA
+  FILEVERSION    @VERSION_COMMA@
+  PRODUCTVERSION @VERSION_COMMA@
   FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
   FILEFLAGS      0
   FILEOS         VOS_NT_WINDOWS32
@@ -28,11 +24,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName",      "Daniel Usov"
       VALUE "FileDescription",  "Eve's Text"
-      VALUE "FileVersion",      APP_VERSION
+      VALUE "FileVersion",      "@VERSION@"
       VALUE "InternalName",     "Eve's Text"
       VALUE "OriginalFilename", "Eve's Text.exe"
       VALUE "ProductName",      "Eve's Text"
-      VALUE "ProductVersion",   APP_VERSION
+      VALUE "ProductVersion",   "@VERSION@"
     END
   END
   BLOCK "VarFileInfo"
