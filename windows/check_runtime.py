@@ -54,6 +54,12 @@ def main() -> int:
     results: list[bool] = []
 
     def gtk_init():
+        # OLE и GDK инициализируются в строгом порядке: сначала наш
+        # OleInitialize, потом CoInitializeEx внутри Gtk.init().
+        from eves_text import win_dnd
+
+        win_dnd.configure_dnd()
+
         import gi
 
         gi.require_version("Gtk", "3.0")
@@ -150,13 +156,14 @@ def main() -> int:
     results.append(check("шрифт", font))
 
     def file_dnd():
-        """Проверить собственный COM-приёмник файлов из Проводника."""
-        from eves_text import win_com_drop, win_dnd
+        """Проверить регистрацию COM-приёмника на настоящем HWND окна."""
+        from eves_text import win_com_drop, win_dnd, win_theme
 
         if not win_dnd.use_com_file_drop():
             raise RuntimeError("COM DnD должен быть включён в Windows")
 
         import ctypes
+        from gi.repository import Gtk
 
         ole32, shell32, cf_shell, cf_file = win_com_drop._libraries()
         for library, names in (
@@ -176,9 +183,26 @@ def main() -> int:
             for name in names:
                 if not hasattr(library, name):
                     raise RuntimeError(f"нет {name}")
+
+        window = Gtk.Window()
+        try:
+            window.realize()
+            gdk_window = window.get_window()
+            if gdk_window is None:
+                raise RuntimeError("окно не получило GdkWindow")
+            hwnd = win_theme.gdk_window_handle(gdk_window)
+            if not hwnd:
+                raise RuntimeError("не удалось получить HWND окна")
+            drop = win_com_drop.install_for_window(lambda _paths: None, gdk_window)
+            if drop is None or not drop.installed:
+                raise RuntimeError("RegisterDragDrop не зарегистрировал IDropTarget")
+            drop.uninstall()
+        finally:
+            window.destroy()
+
         return (
-            "COM IDropTarget, CFSTR_SHELLIDLIST="
-            f"{cf_shell}, CFSTR_FILEDESCRIPTOR={cf_file}"
+            f"COM IDropTarget на HWND {hwnd:#x}, "
+            f"CFSTR_SHELLIDLIST={cf_shell}, CFSTR_FILEDESCRIPTOR={cf_file}"
         )
 
     results.append(check("DnD файлов", file_dnd))

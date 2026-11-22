@@ -9,6 +9,9 @@
 Модуль не трогает Windows API на других ОС: разбор форматов можно проверять
 в тестах на Linux. Окно получает только список путей, открывает их уже
 существующий метод ``_open_dropped_uris()``.
+
+``initialize_ole()`` вызывается до Gtk.init(): GDK инициализирует COM через
+CoInitializeEx, а RegisterDragDrop требует предварительного OleInitialize.
 """
 
 from __future__ import annotations
@@ -145,8 +148,10 @@ class IDropTargetStruct(ctypes.Structure):
 
 _ole32 = None
 _shell32 = None
+_kernel32 = None
 _cf_shell_idlist = 0
 _cf_file_descriptor = 0
+_ole_initialized = False
 # COM хранит ссылку на IDropTarget между RegisterDragDrop и RevokeDragDrop;
 # словарь не даёт Python-объекту исчезнуть вместе с окном.
 _targets: dict[int, "ComFileDrop"] = {}
@@ -154,7 +159,7 @@ _targets: dict[int, "ComFileDrop"] = {}
 
 def _libraries():
     """Загрузить ole32/shell32 и один раз настроить сигнатуры и форматы."""
-    global _ole32, _shell32, _cf_shell_idlist, _cf_file_descriptor
+    global _ole32, _shell32, _kernel32, _cf_shell_idlist, _cf_file_descriptor
     if _ole32 is not None and _shell32 is not None:
         return _ole32, _shell32, _cf_shell_idlist, _cf_file_descriptor
     if os.name != "nt":
@@ -201,7 +206,28 @@ def _libraries():
     _cf_file_descriptor = register_format("FileGroupDescriptorW")
     _ole32 = ole32
     _shell32 = shell32
+    _kernel32 = kernel32
     return _ole32, _shell32, _cf_shell_idlist, _cf_file_descriptor
+
+
+def initialize_ole() -> bool:
+    """Инициализировать OLE до GDK, который вызывает только CoInitializeEx.
+
+    Документация RegisterDragDrop требует, чтобы приложение с drag-and-drop
+    вызывало именно OleInitialize. GDK Win32 делает CoInitializeEx при
+    Gtk.init(); если OLE ещё не готов, RegisterDragDrop возвращает
+    E_OUTOFMEMORY, и броски не доходят до нашего IDropTarget. Поэтому
+    ``win_dnd.configure_dnd()`` вызывает эту функцию до Gtk.init().
+    """
+    global _ole_initialized
+    if _ole_initialized:
+        return True
+    ole32, _shell32, _cf_shell, _cf_file = _libraries()
+    result = ole32.OleInitialize(None)
+    if result not in (S_OK, S_FALSE):
+        raise ComDropError(f"OleInitialize вернул {result:#x}")
+    _ole_initialized = True
+    return True
 
 
 def _vtable_address(pointer: int | ctypes.c_void_p) -> int:
@@ -321,20 +347,29 @@ def paths_from_file_descriptor(data: bytes) -> list[str]:
     return paths
 
 
-def _medium_bytes(stg: STGMEDIUM, ole32) -> bytes:
+def _medium_bytes(stg: STGMEDIUM) -> bytes:
+    """Прочитать HGLOBAL из STGMEDIUM.
+
+    GlobalLock/GlobalSize/GlobalUnlock живут в kernel32, а не в ole32.
+    Вызов ``ole32.GlobalSize`` заканчивается AttributeError, из-за чего
+    Drop молча терял все пути из IDataObject.
+    """
+    if _kernel32 is None:
+        _libraries()
+    assert _kernel32 is not None
     handle = stg.u.hGlobal
     if not handle:
         return b""
-    size = ole32.GlobalSize(handle)
+    size = _kernel32.GlobalSize(handle)
     if not size:
         return b""
-    pointer = ole32.GlobalLock(handle)
+    pointer = _kernel32.GlobalLock(handle)
     if not pointer:
         return b""
     try:
         return ctypes.string_at(pointer, size)
     finally:
-        ole32.GlobalUnlock(handle)
+        _kernel32.GlobalUnlock(handle)
 
 
 def _enum_data_formats(data_object) -> set[int]:
@@ -427,7 +462,7 @@ def _get_medium(data_object, fmt: int) -> STGMEDIUM | None:
 
 def dropped_paths(data_object) -> list[str]:
     """Получить список путей из IDataObject броска."""
-    ole32, shell32, cf_shell, cf_file = _libraries()
+    _ole32, shell32, cf_shell, cf_file = _libraries()
     formats = _enum_data_formats(data_object)
 
     def available(fmt: int) -> bool:
@@ -441,13 +476,13 @@ def dropped_paths(data_object) -> list[str]:
             continue
         try:
             if fmt == cf_shell:
-                paths = paths_from_shell_idlist(_medium_bytes(medium, ole32), shell32)
+                paths = paths_from_shell_idlist(_medium_bytes(medium), shell32)
             elif fmt == CF_HDROP:
                 paths = paths_from_hdrop_handle(medium.u.hGlobal, shell32)
             else:
-                paths = paths_from_file_descriptor(_medium_bytes(medium, ole32))
+                paths = paths_from_file_descriptor(_medium_bytes(medium))
         finally:
-            ole32.ReleaseStgMedium(ctypes.byref(medium))
+            _ole32.ReleaseStgMedium(ctypes.byref(medium))
         if paths:
             return paths
     return []
@@ -461,7 +496,6 @@ class ComFileDrop:
         self._ref_count = 1
         self._hwnd: int | None = None
         self._installed = False
-        self._ole_initialized = False
         self._vtbl = IDropTargetVtbl(
             _QUERY_INTERFACE(self._query_interface),
             _ADD_REF(self._add_ref),
@@ -534,16 +568,10 @@ class ComFileDrop:
         """Зарегистрировать IDropTarget на HWND. Возвращает True при успехе."""
         if not hwnd or self._installed or hwnd in _targets:
             return False
+        initialize_ole()
         ole32, _shell32, _cf_shell, _cf_file = _libraries()
-        result = ole32.OleInitialize(None)
-        if result not in (S_OK, S_FALSE):
-            raise ComDropError(f"OleInitialize вернул {result:#x}")
-        self._ole_initialized = result == S_OK
         result = ole32.RegisterDragDrop(ctypes.c_void_p(hwnd), self._pointer)
         if result != S_OK:
-            if self._ole_initialized:
-                ole32.OleUninitialize()
-                self._ole_initialized = False
             raise ComDropError(f"RegisterDragDrop вернул {result:#x}")
         _targets[hwnd] = self
         self._hwnd = hwnd
@@ -560,9 +588,7 @@ class ComFileDrop:
             # COM всё ещё держит указатель: оставляем объект живым и зарегистрированным.
             return
         self._ref_count = max(0, self._ref_count - 1)
-        if self._ole_initialized:
-            ole32.OleUninitialize()
-            self._ole_initialized = False
+        # OLE инициализирован один раз до Gtk.init() и живёт до выхода процесса.
         _targets.pop(hwnd, None)
         self._installed = False
         self._hwnd = None

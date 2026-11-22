@@ -1390,6 +1390,99 @@ def test_com_drop_parsing() -> None:
     assert win_com_drop.paths_from_file_descriptor(descriptor) == [name]
 
 
+def test_com_drop_medium_bytes_uses_kernel32() -> None:
+    """HGLOBAL читается через kernel32: в ole32 этих функций нет."""
+    import ctypes
+
+    from eves_text import win_com_drop
+
+    payload = b"CFSTR_SHELLIDLIST"
+    buffer = ctypes.create_string_buffer(payload)
+
+    class FakeKernel32:
+        def __init__(self) -> None:
+            self.unlocked = 0
+
+        def GlobalSize(self, _handle) -> int:
+            return len(payload)
+
+        def GlobalLock(self, _handle) -> int:
+            return ctypes.addressof(buffer)
+
+        def GlobalUnlock(self, _handle) -> int:
+            self.unlocked += 1
+            return 1
+
+    class FakeOle32:
+        def __getattr__(self, name: str):
+            if name.startswith("Global"):
+                raise AssertionError(f"нельзя вызывать ole32.{name}")
+            raise AttributeError(name)
+
+    kernel32 = FakeKernel32()
+    medium = win_com_drop.STGMEDIUM()
+    medium.u.hGlobal = 123
+    with (
+        mock.patch.object(win_com_drop, "_kernel32", kernel32),
+        mock.patch.object(win_com_drop, "_ole32", FakeOle32()),
+    ):
+        assert win_com_drop._medium_bytes(medium) == payload
+    assert kernel32.unlocked == 1
+
+
+def test_com_drop_dropped_paths_reads_medium() -> None:
+    """Полный путь Drop: HGLOBAL → CIDA → список путей → ReleaseStgMedium."""
+    import ctypes
+
+    from eves_text import win_com_drop as w
+
+    payload = b"cida"
+    buffer = ctypes.create_string_buffer(payload)
+
+    class FakeKernel32:
+        def GlobalSize(self, _handle) -> int:
+            return len(payload)
+
+        def GlobalLock(self, _handle) -> int:
+            return ctypes.addressof(buffer)
+
+        def GlobalUnlock(self, _handle) -> int:
+            return 1
+
+    class FakeOle32:
+        def __init__(self) -> None:
+            self.released = 0
+
+        def ReleaseStgMedium(self, _medium) -> None:
+            self.released += 1
+
+        def __getattr__(self, name: str):
+            if name.startswith("Global"):
+                raise AssertionError(f"нельзя вызывать ole32.{name}")
+            raise AttributeError(name)
+
+    medium = w.STGMEDIUM()
+    medium.tymed = w.TYMED_HGLOBAL
+    medium.u.hGlobal = 123
+    ole = FakeOle32()
+    seen: list[bytes] = []
+
+    def parse(data: bytes, _shell32) -> list[str]:
+        seen.append(data)
+        return [r"C:\Users\Jean\файл.txt"]
+
+    with (
+        mock.patch.object(w, "_libraries", return_value=(ole, mock.Mock(), 100, 101)),
+        mock.patch.object(w, "_kernel32", FakeKernel32()),
+        mock.patch.object(w, "_enum_data_formats", return_value={100}),
+        mock.patch.object(w, "_get_medium", return_value=medium),
+        mock.patch.object(w, "paths_from_shell_idlist", side_effect=parse),
+    ):
+        assert w.dropped_paths(object()) == [r"C:\Users\Jean\файл.txt"]
+    assert seen == [payload]
+    assert ole.released == 1
+
+
 def test_com_drop_registration() -> None:
     """IDropTarget регистрируется на HWND и снимается при закрытии окна."""
     from eves_text import win_com_drop
@@ -1422,9 +1515,13 @@ def test_com_drop_registration() -> None:
     ole = FakeOle()
     libraries = (ole, mock.Mock(), 100, 101)
     received: list[list[str]] = []
-    with mock.patch.object(win_com_drop, "_libraries", return_value=libraries):
+    with (
+        mock.patch.object(win_com_drop, "_libraries", return_value=libraries),
+        mock.patch.object(win_com_drop, "_ole_initialized", False),
+    ):
         drop = win_com_drop.ComFileDrop(received.append)
         assert drop.install(321) is True
+        assert ole.initialized == 1
         assert len(ole.registered) == 1
         assert ole.registered[0][0] == 321
         assert ole.registered[0][1].value == drop.pointer
@@ -1436,7 +1533,7 @@ def test_com_drop_registration() -> None:
             )
         drop.uninstall()
         assert ole.revoked == [321]
-        assert ole.uninitialized == 1
+        assert ole.uninitialized == 0
         assert drop.installed is False
         assert 321 not in win_com_drop._targets
 
@@ -1509,15 +1606,19 @@ def test_com_drop_opens_new_tab(app: Application) -> None:
 
 
 def test_win_dnd_mode() -> None:
-    """В Windows GDK OLE2 выключен: файлы принимает наш COM IDropTarget."""
-    from eves_text import win_dnd
+    """В Windows OLE поднимается до GDK, GDK OLE2 выключен."""
+    from eves_text import win_com_drop, win_dnd
 
-    with mock.patch.object(os, "name", "nt"):
-        with mock.patch.dict(os.environ, {win_dnd.OLE2_ENV: "1"}, clear=False):
-            win_dnd.configure_dnd()
-            assert win_dnd.use_com_file_drop() is True
-            # GDK смотрит на наличие переменной: "0" её не отключил бы.
-            assert win_dnd.OLE2_ENV not in os.environ
+    with (
+        mock.patch.object(os, "name", "nt"),
+        mock.patch.dict(os.environ, {win_dnd.OLE2_ENV: "1"}, clear=False),
+        mock.patch.object(win_com_drop, "initialize_ole", return_value=True) as initialize,
+    ):
+        win_dnd.configure_dnd()
+        assert initialize.call_count == 1
+        assert win_dnd.use_com_file_drop() is True
+        # GDK смотрит на наличие переменной: "0" её не отключил бы.
+        assert win_dnd.OLE2_ENV not in os.environ
 
 
 def test_settings(app: Application) -> None:
