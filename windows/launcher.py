@@ -153,9 +153,9 @@ def configure(base: Path) -> None:
     os.environ["DICPATH"] = str(share / "hunspell")
     # GTK иначе возьмёт переводы из /ucrt64/share/locale.
     os.environ.setdefault("GTK_LOCALEDIR", str(share / "locale"))
-    # Режим DnD выбирает eves_text.win_dnd до импорта Gtk (см. __init__.py):
-    # по умолчанию Windows принимает файлы через WM_DROPFILES, а experimental
-    # OLE2 включается только явной переменной EVESTEXT_USE_OLE2_DND.
+    # Файлы из Проводника принимает собственный COM IDropTarget окна.
+    # eves_text.win_dnd до импорта Gtk убирает experimental OLE2-флаг GDK,
+    # чтобы GDK не регистрировал свой приёмник на том же HWND.
 
     cache_dir = local_app_data() / "cache"
 

@@ -1319,13 +1319,51 @@ def test_drag_and_drop(app: Application) -> None:
         user_settings.save = original_save
 
 
-def test_native_drop_hdrop_parsing() -> None:
-    """Пути из нативного HDROP читаются с Unicode и пробелами в имени."""
-    from eves_text import win_drop
+def test_com_drop_parsing() -> None:
+    """COM-приёмник разбирает CIDA, HDROP и FILEDESCRIPTOR без Windows."""
+    import ctypes
+    import struct
+
+    from eves_text import win_com_drop
+
+    def pidl(path: str) -> bytes:
+        if not path:
+            return b"\x00\x00"
+        data = path.encode("utf-16-le")
+        return struct.pack("<H", len(data) + 2) + data + b"\x00\x00"
+
+    first = r"C:\Users\Jean\первый файл.txt"
+    second = r"C:\Users\Jean\документ.rtf"
+    parent = pidl("")
+    children = [pidl(first), pidl(second)]
+    # CIDA: cidl + (cidl + 1) смещений: родитель и cidl относительных PIDL.
+    header_size = 4 + 4 * (len(children) + 1)
+    offsets = [header_size, header_size + len(parent)]
+    for child in children[:-1]:
+        offsets.append(offsets[-1] + len(child))
+    cida = struct.pack("<I", len(children)) + struct.pack(
+        f"<{len(offsets)}I", *offsets
+    ) + parent + b"".join(children)
 
     class FakeShell:
-        def __init__(self, files: list[str]) -> None:
-            self.files = files
+        def __init__(self) -> None:
+            self.expected = {
+                parent[:-2] + child: path
+                for child, path in zip(children, (first, second))
+            }
+
+        def SHGetPathFromIDListW(self, pointer, buffer) -> int:
+            raw = ctypes.string_at(pointer, 2 + 2 * 260)
+            for item, path in self.expected.items():
+                if raw.startswith(item):
+                    buffer.value = path
+                    return 1
+            return 0
+
+    assert win_com_drop.paths_from_shell_idlist(cida, FakeShell()) == [first, second]
+
+    class FakeDropShell:
+        files = [r"C:\Users\Jean\первый файл.txt", r"C:\Users\Jean\файл.rtf", ""]
 
         def DragQueryFileW(self, _hdrop, index, buffer, size):
             if index == 0xFFFFFFFF:
@@ -1336,36 +1374,75 @@ def test_native_drop_hdrop_parsing() -> None:
             buffer.value = value
             return len(value)
 
-    class FinishShell(FakeShell):
-        def __init__(self, files: list[str]) -> None:
-            super().__init__(files)
-            self.finished: list[int] = []
+    assert win_com_drop.paths_from_hdrop_handle(42, FakeDropShell()) == [
+        r"C:\Users\Jean\первый файл.txt",
+        r"C:\Users\Jean\файл.rtf",
+    ]
 
-        def DragFinish(self, hdrop) -> None:
-            self.finished.append(hdrop)
-
-    shell = FakeShell(
-        [r"C:\Users\Jean\первый файл.txt", r"C:\Users\Jean\документ.rtf", ""]
+    name = "из дескриптора.txt"
+    descriptor = (
+        struct.pack("<I", 1)
+        + b"\x00" * win_com_drop.FILEDESCRIPTORW_NAME_OFFSET
+        + name.encode("utf-16-le").ljust(
+            win_com_drop.FILEDESCRIPTORW_NAME_SIZE, b"\x00"
+        )
     )
-    paths = win_drop.dropped_paths_from_hdrop(42, shell)
-    assert paths == [r"C:\Users\Jean\первый файл.txt", r"C:\Users\Jean\документ.rtf"]
+    assert win_com_drop.paths_from_file_descriptor(descriptor) == [name]
 
-    finish_shell = FinishShell([r"C:\Users\Jean\файл.txt"])
+
+def test_com_drop_registration() -> None:
+    """IDropTarget регистрируется на HWND и снимается при закрытии окна."""
+    from eves_text import win_com_drop
+
+    class FakeOle:
+        def __init__(self) -> None:
+            self.registered: list[tuple[int, int]] = []
+            self.revoked: list[int] = []
+            self.initialized = 0
+            self.uninitialized = 0
+
+        def OleInitialize(self, _reserved) -> int:
+            self.initialized += 1
+            return win_com_drop.S_OK
+
+        def OleUninitialize(self) -> None:
+            self.uninitialized += 1
+
+        def RegisterDragDrop(self, hwnd, pointer) -> int:
+            self.registered.append((int(hwnd.value), pointer))
+            return win_com_drop.S_OK
+
+        def RevokeDragDrop(self, hwnd) -> int:
+            self.revoked.append(int(hwnd.value))
+            return win_com_drop.S_OK
+
+        def ReleaseStgMedium(self, _medium) -> None:
+            pass
+
+    ole = FakeOle()
+    libraries = (ole, mock.Mock(), 100, 101)
     received: list[list[str]] = []
-    user32 = mock.Mock()
-    with mock.patch.object(win_drop, "_libraries", return_value=(user32, finish_shell)):
-        with mock.patch.object(win_drop, "dropped_paths_from_hdrop", return_value=[]):
-            win_drop._windows[1] = (123, received.append)
-            try:
-                assert win_drop._window_proc(1, win_drop._WM_DROPFILES, 77, 0) == 0
-            finally:
-                win_drop._windows.pop(1, None)
-    assert finish_shell.finished == [77]
-    assert received == []
+    with mock.patch.object(win_com_drop, "_libraries", return_value=libraries):
+        drop = win_com_drop.ComFileDrop(received.append)
+        assert drop.install(321) is True
+        assert len(ole.registered) == 1
+        assert ole.registered[0][0] == 321
+        assert ole.registered[0][1].value == drop.pointer
+        with mock.patch.object(
+            win_com_drop, "_enum_data_formats", return_value={100}
+        ):
+            assert (
+                drop._effect_for(object()) == win_com_drop.DROPEFFECT_COPY
+            )
+        drop.uninstall()
+        assert ole.revoked == [321]
+        assert ole.uninitialized == 1
+        assert drop.installed is False
+        assert 321 not in win_com_drop._targets
 
 
-def test_native_drop_opens_new_tab(app: Application) -> None:
-    """Нативный бросок открывает файл рядом, не меняя текст текущей вкладки."""
+def test_com_drop_opens_new_tab(app: Application) -> None:
+    """COM-бросок открывает файл рядом, не меняя текст текущей вкладки."""
     from eves_text import settings as user_settings
 
     original_load = user_settings.load
@@ -1384,7 +1461,7 @@ def test_native_drop_opens_new_tab(app: Application) -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / "из проводника.txt"
                 path.write_text("Файл из Проводника", encoding="utf-8")
-                assert window._open_native_dropped_paths([str(path)]) is False
+                assert window._open_com_dropped_paths([str(path)]) is False
 
             assert len(window._tabs) == 2
             assert window._active_tab is not opened
@@ -1399,25 +1476,15 @@ def test_native_drop_opens_new_tab(app: Application) -> None:
 
 
 def test_win_dnd_mode() -> None:
-    """По умолчанию Windows принимает файлы через WM_DROPFILES, не OLE2."""
+    """В Windows GDK OLE2 выключен: файлы принимает наш COM IDropTarget."""
     from eves_text import win_dnd
 
     with mock.patch.object(os, "name", "nt"):
         with mock.patch.dict(os.environ, {win_dnd.OLE2_ENV: "1"}, clear=False):
-            os.environ.pop(win_dnd.OLE2_OPT_IN_ENV, None)
             win_dnd.configure_dnd()
-            assert win_dnd.use_native_file_drop()
+            assert win_dnd.use_com_file_drop() is True
             # GDK смотрит на наличие переменной: "0" её не отключил бы.
             assert win_dnd.OLE2_ENV not in os.environ
-
-        with mock.patch.dict(os.environ, {win_dnd.OLE2_OPT_IN_ENV: "1"}, clear=False):
-            os.environ.pop(win_dnd.OLE2_ENV, None)
-            win_dnd.configure_dnd()
-            assert not win_dnd.use_native_file_drop()
-            assert os.environ[win_dnd.OLE2_ENV] == "1"
-
-        with mock.patch.dict(os.environ, {win_dnd.OLE2_ENV: "0"}):
-            assert win_dnd.ole2_dnd_enabled()
 
 
 def test_settings(app: Application) -> None:
@@ -1557,8 +1624,9 @@ if __name__ == "__main__":
     test_app = test_window()
     test_formatting(test_app)
     test_drag_and_drop(test_app)
-    test_native_drop_hdrop_parsing()
-    test_native_drop_opens_new_tab(test_app)
+    test_com_drop_parsing()
+    test_com_drop_registration()
+    test_com_drop_opens_new_tab(test_app)
     test_win_dnd_mode()
     test_settings(test_app)
     print("OK: smoke test пройден")

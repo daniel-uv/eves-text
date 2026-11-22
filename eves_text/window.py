@@ -32,8 +32,8 @@ from . import (  # noqa: E402
     ai_check,
     document,
     updates,
+    win_com_drop,
     win_dnd,
-    win_drop,
     win_theme,
 )
 from . import settings as user_settings  # noqa: E402
@@ -71,9 +71,8 @@ TEXT_FORMAT_KEYS = ("bold", "italic", "underline")
 DND_URI_LIST = 100
 DND_UTF8_STRING = 101
 DND_TEXT_PLAIN = 102
-# "Shell IDList Array" намеренно не объявляем: по документации GDK Win32
-# наличие такой цели отключает автоматическое превращение CFSTR_SHELLIDLIST
-# в text/uri-list. В нативном режиме Windows файлы приходят через WM_DROPFILES.
+# "Shell IDList Array" намеренно не объявляем: GDK не должен регистрировать
+# свой IDropTarget на том же HWND. В Windows файлы принимает наш COM-приёмник.
 DND_TARGETS: tuple[tuple[str, int], ...] = (
     ("text/uri-list", DND_URI_LIST),
     ("UTF8_STRING", DND_UTF8_STRING),
@@ -544,7 +543,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._line_numbers = False
         self._highlight_line = True
         self._spell_check = True
-        self._native_drop: win_drop.NativeFileDrop | None = None
+        self._com_drop: win_com_drop.ComFileDrop | None = None
 
         config = user_settings.load()
         saved_size = config.get("font_size")
@@ -1801,10 +1800,10 @@ class MainWindow(Gtk.ApplicationWindow):
     def _setup_drop_target(self, widget: Gtk.Widget) -> None:
         """Разрешить бросать файлы на окно, поле ввода и его прокрутку.
 
-        В нативном режиме Windows GTK-цели не регистрируются: иначе GDK вызвал
-        бы ``RegisterDragDrop()`` и Проводник выбрал бы OLE2 вместо
-        ``WM_DROPFILES``. Файлы в этом случае приходят в ``_on_map()`` через
-        ``win_drop`` и идут в тот же ``_open_dropped_uris()``.
+        В Windows GTK-цели не регистрируются: иначе GDK вызвал бы
+        ``RegisterDragDrop()`` на том же HWND и перехватил бросок раньше нашего
+        COM-приёмника. Файлы приходят в ``_on_map()`` через ``win_com_drop``
+        и идут в тот же ``_open_dropped_uris()``.
 
         В остальных случаях проводник предлагает перетаскивание как Move и
         отдаёт путь файла не только как URI, но и как обычный текст. Поэтому
@@ -1812,7 +1811,7 @@ class MainWindow(Gtk.ApplicationWindow):
         перетаскивания делаем сами — без GTK_DEST_DEFAULT_DROP, чтобы один
         бросок не обрабатывался дважды.
         """
-        if win_dnd.use_native_file_drop():
+        if win_dnd.use_com_file_drop():
             return
         # Без флагов OTHER_APP/SAME_APP: в Windows источником считается
         # корневое окно, и проверка «другое приложение» может не пройти.
@@ -3197,25 +3196,25 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_map(self, *_args) -> None:
         self._apply_windows_titlebar()
         self._apply_titlebar_variant()
-        self._install_native_file_drop()
+        self._install_com_file_drop()
 
-    def _install_native_file_drop(self) -> None:
-        """Включить ``WM_DROPFILES`` на HWND окна в нативном режиме Windows."""
-        if not win_dnd.use_native_file_drop() or self._native_drop is not None:
+    def _install_com_file_drop(self) -> None:
+        """Зарегистрировать COM ``IDropTarget`` на HWND окна в Windows."""
+        if not win_dnd.use_com_file_drop() or self._com_drop is not None:
             return
         gdk_window = self.get_window()
         if gdk_window is None:
             return
-        self._native_drop = win_drop.install_for_window(
-            self._on_native_files_dropped, gdk_window
+        self._com_drop = win_com_drop.install_for_window(
+            self._on_com_files_dropped, gdk_window
         )
 
-    def _on_native_files_dropped(self, paths: list[str]) -> None:
-        """Передать пути из ``HDROP`` в GTK-поток обработки бросков."""
-        GLib.idle_add(self._open_native_dropped_paths, list(paths))
+    def _on_com_files_dropped(self, paths: list[str]) -> None:
+        """Передать пути из COM-броска в GTK-поток обработки бросков."""
+        GLib.idle_add(self._open_com_dropped_paths, list(paths))
 
-    def _open_native_dropped_paths(self, paths: list[str]) -> bool:
-        """Открыть файлы из нативного броска, не меняя текущий документ."""
+    def _open_com_dropped_paths(self, paths: list[str]) -> bool:
+        """Открыть файлы из COM-броска, не меняя текущий документ."""
         self._open_dropped_uris(paths)
         return False
 
@@ -3817,9 +3816,9 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_destroy(self, *_args) -> None:
         """Останавливает скачивание и отдельную службу при закрытии окна."""
         self._destroyed = True
-        if self._native_drop is not None:
-            self._native_drop.uninstall()
-            self._native_drop = None
+        if self._com_drop is not None:
+            self._com_drop.uninstall()
+            self._com_drop = None
         self._stop_tab_animation()
         self._cancel_tab_drag()
         for tab in self._tabs:

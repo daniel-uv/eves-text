@@ -150,29 +150,32 @@ def main() -> int:
     results.append(check("шрифт", font))
 
     def file_dnd():
-        """Проверить выбранный механизм приёма файлов из Проводника."""
-        import ctypes
+        """Проверить собственный COM-приёмник файлов из Проводника."""
+        from eves_text import win_com_drop, win_dnd
 
-        from eves_text import win_dnd, win_drop
+        if not win_dnd.use_com_file_drop():
+            raise RuntimeError("COM DnD должен быть включён в Windows")
 
-        if not win_dnd.use_native_file_drop():
-            if not win_dnd.ole2_dnd_enabled():
-                raise RuntimeError(
-                    f"{win_dnd.OLE2_OPT_IN_ENV} задан, но {win_dnd.OLE2_ENV} не включён"
-                )
-            return f"experimental OLE2 ({win_dnd.OLE2_ENV})"
-
-        user32 = ctypes.windll.user32
-        shell32 = ctypes.windll.shell32
+        ole32, shell32, cf_shell, cf_file = win_com_drop._libraries()
         for library, names in (
-            (user32, ("CallWindowProcW", "DefWindowProcW")),
-            (shell32, ("DragAcceptFiles", "DragQueryFileW", "DragFinish")),
+            (
+                ole32,
+                (
+                    "OleInitialize",
+                    "RegisterDragDrop",
+                    "RevokeDragDrop",
+                    "ReleaseStgMedium",
+                ),
+            ),
+            (shell32, ("SHGetPathFromIDListW", "DragQueryFileW")),
         ):
             for name in names:
                 if not hasattr(library, name):
                     raise RuntimeError(f"нет {name}")
-        win_drop._libraries()
-        return "WM_DROPFILES, DragQueryFileW, DragFinish, SetWindowLongPtrW"
+        return (
+            "COM IDropTarget, CFSTR_SHELLIDLIST="
+            f"{cf_shell}, CFSTR_FILEDESCRIPTOR={cf_file}"
+        )
 
     results.append(check("DnD файлов", file_dnd))
 
