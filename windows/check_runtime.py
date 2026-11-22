@@ -158,8 +158,8 @@ def main() -> int:
         from eves_text import win_drop
 
         for library, names in (
-            (user32, ("CallWindowProcW", "DragAcceptFiles", "DefWindowProcW")),
-            (shell32, ("DragQueryFileW", "DragFinish")),
+            (user32, ("CallWindowProcW", "DefWindowProcW")),
+            (shell32, ("DragAcceptFiles", "DragQueryFileW", "DragFinish")),
         ):
             for name in names:
                 if not hasattr(library, name):

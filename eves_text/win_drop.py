@@ -88,7 +88,7 @@ def _libraries():
     ]
     def_window_proc.restype = ctypes.c_ssize_t
 
-    drag_accept = user32.DragAcceptFiles
+    drag_accept = shell32.DragAcceptFiles
     drag_accept.argtypes = [ctypes.c_void_p, ctypes.c_bool]
     drag_accept.restype = None
 
@@ -185,7 +185,7 @@ class NativeFileDrop:
         self._installed = True
         # GTK вызывает DragAcceptFiles только в gdk_window_register_dnd(),
         # а мы перехватываем событие раньше GDK — включаем приём файлов сами.
-        user32.DragAcceptFiles(hwnd, True)
+        shell32.DragAcceptFiles(hwnd, True)
         return True
 
     def uninstall(self) -> None:
@@ -196,7 +196,7 @@ class NativeFileDrop:
         previous = _windows.pop(self._hwnd, (None, None))[0]
         if previous is not None:
             _set_window_long_ptr(self._hwnd, _GWLP_WNDPROC, previous)
-        user32.DragAcceptFiles(self._hwnd, False)
+        shell32.DragAcceptFiles(self._hwnd, False)
         self._installed = False
         self._hwnd = None
 
