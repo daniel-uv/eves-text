@@ -1190,7 +1190,11 @@ def test_native_file_dialog_filters() -> None:
 def test_drag_and_drop(app: Application) -> None:
     """Бросок .txt открывает файл в новой вкладке — в любом формате данных."""
     from eves_text import settings as user_settings
-    from eves_text.window import DND_TEXT_PLAIN, DND_URI_LIST
+    from eves_text.window import DND_TARGETS, DND_TEXT_PLAIN, DND_URI_LIST
+
+    # Явный Win32-формат отключает в GDK автоматический CFSTR_SHELLIDLIST →
+    # text/uri-list; в OLE2-режиме он нам только мешает.
+    assert all(name != "Shell IDList Array" for name, _info in DND_TARGETS)
 
     class FakeSelectionData:
         """Имитация Gtk.SelectionData без реального X11/Win32-события."""
@@ -1315,19 +1319,105 @@ def test_drag_and_drop(app: Application) -> None:
         user_settings.save = original_save
 
 
-def test_win_ole2_dnd_enabled() -> None:
-    """В Windows включаем стандартный OLE2 DnD до инициализации GDK."""
+def test_native_drop_hdrop_parsing() -> None:
+    """Пути из нативного HDROP читаются с Unicode и пробелами в имени."""
+    from eves_text import win_drop
+
+    class FakeShell:
+        def __init__(self, files: list[str]) -> None:
+            self.files = files
+
+        def DragQueryFileW(self, _hdrop, index, buffer, size):
+            if index == 0xFFFFFFFF:
+                return len(self.files)
+            value = self.files[index]
+            if buffer is None:
+                return len(value)
+            buffer.value = value
+            return len(value)
+
+    class FinishShell(FakeShell):
+        def __init__(self, files: list[str]) -> None:
+            super().__init__(files)
+            self.finished: list[int] = []
+
+        def DragFinish(self, hdrop) -> None:
+            self.finished.append(hdrop)
+
+    shell = FakeShell(
+        [r"C:\Users\Jean\первый файл.txt", r"C:\Users\Jean\документ.rtf", ""]
+    )
+    paths = win_drop.dropped_paths_from_hdrop(42, shell)
+    assert paths == [r"C:\Users\Jean\первый файл.txt", r"C:\Users\Jean\документ.rtf"]
+
+    finish_shell = FinishShell([r"C:\Users\Jean\файл.txt"])
+    received: list[list[str]] = []
+    user32 = mock.Mock()
+    with mock.patch.object(win_drop, "_libraries", return_value=(user32, finish_shell)):
+        with mock.patch.object(win_drop, "dropped_paths_from_hdrop", return_value=[]):
+            win_drop._windows[1] = (123, received.append)
+            try:
+                assert win_drop._window_proc(1, win_drop._WM_DROPFILES, 77, 0) == 0
+            finally:
+                win_drop._windows.pop(1, None)
+    assert finish_shell.finished == [77]
+    assert received == []
+
+
+def test_native_drop_opens_new_tab(app: Application) -> None:
+    """Нативный бросок открывает файл рядом, не меняя текст текущей вкладки."""
+    from eves_text import settings as user_settings
+
+    original_load = user_settings.load
+    original_save = user_settings.save
+    user_settings.load = lambda: {}
+    user_settings.save = lambda data: None
+
+    try:
+        window = MainWindow(application=app)
+        try:
+            opened = window._active_tab
+            assert opened is not None
+            window.set_text("Текущий текст документа", None)
+            original = window.get_text()
+
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "из проводника.txt"
+                path.write_text("Файл из Проводника", encoding="utf-8")
+                assert window._open_native_dropped_paths([str(path)]) is False
+
+            assert len(window._tabs) == 2
+            assert window._active_tab is not opened
+            assert window.get_text() == "Файл из Проводника"
+            start, end = opened.buffer.get_bounds()
+            assert opened.buffer.get_text(start, end, True) == original
+        finally:
+            window.destroy()
+    finally:
+        user_settings.load = original_load
+        user_settings.save = original_save
+
+
+def test_win_dnd_mode() -> None:
+    """По умолчанию Windows принимает файлы через WM_DROPFILES, не OLE2."""
     from eves_text import win_dnd
 
     with mock.patch.object(os, "name", "nt"):
-        with mock.patch.dict(os.environ, {}, clear=False):
+        with mock.patch.dict(os.environ, {win_dnd.OLE2_ENV: "1"}, clear=False):
+            os.environ.pop(win_dnd.OLE2_OPT_IN_ENV, None)
+            win_dnd.configure_dnd()
+            assert win_dnd.use_native_file_drop()
+            # GDK смотрит на наличие переменной: "0" её не отключил бы.
+            assert win_dnd.OLE2_ENV not in os.environ
+
+        with mock.patch.dict(os.environ, {win_dnd.OLE2_OPT_IN_ENV: "1"}, clear=False):
             os.environ.pop(win_dnd.OLE2_ENV, None)
-            win_dnd.enable_ole2_dnd()
-            assert win_dnd.ole2_dnd_enabled()
+            win_dnd.configure_dnd()
+            assert not win_dnd.use_native_file_drop()
             assert os.environ[win_dnd.OLE2_ENV] == "1"
 
-    with mock.patch.dict(os.environ, {win_dnd.OLE2_ENV: "0"}):
-        assert not win_dnd.ole2_dnd_enabled()
+        with mock.patch.dict(os.environ, {win_dnd.OLE2_ENV: "0"}):
+            assert win_dnd.ole2_dnd_enabled()
 
 
 def test_settings(app: Application) -> None:
@@ -1467,5 +1557,8 @@ if __name__ == "__main__":
     test_app = test_window()
     test_formatting(test_app)
     test_drag_and_drop(test_app)
+    test_native_drop_hdrop_parsing()
+    test_native_drop_opens_new_tab(test_app)
+    test_win_dnd_mode()
     test_settings(test_app)
     print("OK: smoke test пройден")

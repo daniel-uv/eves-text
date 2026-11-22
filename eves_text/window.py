@@ -27,7 +27,15 @@ from gi.repository import (  # noqa: E402
     Pango,
 )
 
-from . import __version__, ai_check, document, updates, win_theme  # noqa: E402
+from . import (  # noqa: E402
+    __version__,
+    ai_check,
+    document,
+    updates,
+    win_dnd,
+    win_drop,
+    win_theme,
+)
 from . import settings as user_settings  # noqa: E402
 from .caret import CaretBlinker  # noqa: E402
 from .ollama_server import (  # noqa: E402
@@ -63,14 +71,13 @@ TEXT_FORMAT_KEYS = ("bold", "italic", "underline")
 DND_URI_LIST = 100
 DND_UTF8_STRING = 101
 DND_TEXT_PLAIN = 102
-DND_SHELL_ID_LIST = 103
+# "Shell IDList Array" намеренно не объявляем: по документации GDK Win32
+# наличие такой цели отключает автоматическое превращение CFSTR_SHELLIDLIST
+# в text/uri-list. В нативном режиме Windows файлы приходят через WM_DROPFILES.
 DND_TARGETS: tuple[tuple[str, int], ...] = (
     ("text/uri-list", DND_URI_LIST),
     ("UTF8_STRING", DND_UTF8_STRING),
     ("text/plain", DND_TEXT_PLAIN),
-    # Проводник Windows через OLE2 отдаёт CFSTR_SHELLIDLIST; GDK может
-    # транслировать его в text/uri-list, но цель принимаем для совместимости.
-    ("Shell IDList Array", DND_SHELL_ID_LIST),
 )
 
 # Класс, который ставим на кнопку вручную: в GTK3 псевдокласс :hover
@@ -537,6 +544,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._line_numbers = False
         self._highlight_line = True
         self._spell_check = True
+        self._native_drop: win_drop.NativeFileDrop | None = None
 
         config = user_settings.load()
         saved_size = config.get("font_size")
@@ -1793,12 +1801,19 @@ class MainWindow(Gtk.ApplicationWindow):
     def _setup_drop_target(self, widget: Gtk.Widget) -> None:
         """Разрешить бросать файлы на окно, поле ввода и его прокрутку.
 
-        В Windows проводник предлагает перетаскивание как Move и отдаёт
-        путь файла не только как URI, но и как обычный текст. Поэтому цели
-        задаём явно и действия не ограничиваем только Copy. Завершение
+        В нативном режиме Windows GTK-цели не регистрируются: иначе GDK вызвал
+        бы ``RegisterDragDrop()`` и Проводник выбрал бы OLE2 вместо
+        ``WM_DROPFILES``. Файлы в этом случае приходят в ``_on_map()`` через
+        ``win_drop`` и идут в тот же ``_open_dropped_uris()``.
+
+        В остальных случаях проводник предлагает перетаскивание как Move и
+        отдаёт путь файла не только как URI, но и как обычный текст. Поэтому
+        цели задаём явно и действия не ограничиваем только Copy. Завершение
         перетаскивания делаем сами — без GTK_DEST_DEFAULT_DROP, чтобы один
         бросок не обрабатывался дважды.
         """
+        if win_dnd.use_native_file_drop():
+            return
         # Без флагов OTHER_APP/SAME_APP: в Windows источником считается
         # корневое окно, и проверка «другое приложение» может не пройти.
         targets = [
@@ -1806,9 +1821,7 @@ class MainWindow(Gtk.ApplicationWindow):
             for name, info in DND_TARGETS
         ]
         widget.drag_dest_set(
-            # MOTION по умолчанию убран: с OLE2 GDK Win32 он может отклонить бросок
-            # до нашего обработчика, если не нашёл общую цель. Статус ставим сами.
-            Gtk.DestDefaults.HIGHLIGHT,
+            Gtk.DestDefaults.MOTION | Gtk.DestDefaults.HIGHLIGHT,
             targets,
             Gdk.DragAction.COPY | Gdk.DragAction.MOVE | Gdk.DragAction.LINK,
         )
@@ -3184,6 +3197,27 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_map(self, *_args) -> None:
         self._apply_windows_titlebar()
         self._apply_titlebar_variant()
+        self._install_native_file_drop()
+
+    def _install_native_file_drop(self) -> None:
+        """Включить ``WM_DROPFILES`` на HWND окна в нативном режиме Windows."""
+        if not win_dnd.use_native_file_drop() or self._native_drop is not None:
+            return
+        gdk_window = self.get_window()
+        if gdk_window is None:
+            return
+        self._native_drop = win_drop.install_for_window(
+            self._on_native_files_dropped, gdk_window
+        )
+
+    def _on_native_files_dropped(self, paths: list[str]) -> None:
+        """Передать пути из ``HDROP`` в GTK-поток обработки бросков."""
+        GLib.idle_add(self._open_native_dropped_paths, list(paths))
+
+    def _open_native_dropped_paths(self, paths: list[str]) -> bool:
+        """Открыть файлы из нативного броска, не меняя текущий документ."""
+        self._open_dropped_uris(paths)
+        return False
 
     def _apply_titlebar_variant(self, window: Gtk.Window | None = None) -> None:
         """Сообщает WM вариант рамки окна: светлый или тёмный.
@@ -3783,6 +3817,9 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_destroy(self, *_args) -> None:
         """Останавливает скачивание и отдельную службу при закрытии окна."""
         self._destroyed = True
+        if self._native_drop is not None:
+            self._native_drop.uninstall()
+            self._native_drop = None
         self._stop_tab_animation()
         self._cancel_tab_drag()
         for tab in self._tabs:

@@ -153,9 +153,9 @@ def configure(base: Path) -> None:
     os.environ["DICPATH"] = str(share / "hunspell")
     # GTK иначе возьмёт переводы из /ucrt64/share/locale.
     os.environ.setdefault("GTK_LOCALEDIR", str(share / "locale"))
-    # Стандартный OLE2-перетаскивание файлов: Проводник Windows 11 даёт
-    # CFSTR_SHELLIDLIST, который GDK превращает в text/uri-list.
-    os.environ.setdefault("GDK_WIN32_USE_EXPERIMENTAL_OLE2_DND", "1")
+    # Режим DnD выбирает eves_text.win_dnd до импорта Gtk (см. __init__.py):
+    # по умолчанию Windows принимает файлы через WM_DROPFILES, а experimental
+    # OLE2 включается только явной переменной EVESTEXT_USE_OLE2_DND.
 
     cache_dir = local_app_data() / "cache"
 

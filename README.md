@@ -28,7 +28,8 @@
 - Drag & drop файла прямо в окно ввода, открытие файла из терминала,
   автоматические обновления
 - Windows 11: нативный GUI-`.exe`, выбирается в «Приложениях по умолчанию»
-  для `.txt` и `.rtf`, без окна командной строки
+  для `.txt` и `.rtf`, без окна командной строки; файлы из Проводника
+  открываются перетаскиванием через нативный `WM_DROPFILES`
 
 ## Установка
 
@@ -38,7 +39,7 @@
 и установите:
 
 ```bash
-sudo dpkg -i eves-text_0.6.55-1_all.deb
+sudo dpkg -i eves-text_0.6.56-1_all.deb
 eves-text
 ```
 
@@ -47,12 +48,12 @@ eves-text
 Сборка пакета:
 
 ```bash
-./packaging/build-deb.sh        # -> dist/eves-text_0.6.55-1_all.deb
+./packaging/build-deb.sh        # -> dist/eves-text_0.6.56-1_all.deb
 ```
 
 ### Windows 11
 
-В [Windows-релизе](https://github.com/daniel-uv/eves-text/releases/tag/win-v0.6.55)
+В [Windows-релизе](https://github.com/daniel-uv/eves-text/releases/tag/win-v0.6.56)
 есть установщик `.exe` и портативный `.zip`. Рантайм (Python, GTK, словари)
 уже включён — устанавливать ничего дополнительно не нужно.
 

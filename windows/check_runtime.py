@@ -149,17 +149,32 @@ def main() -> int:
 
     results.append(check("шрифт", font))
 
-    def ole2_dnd():
-        """GDK Win32 должен использовать OLE2 IDropTarget для файлов."""
-        from eves_text import win_dnd
+    def file_dnd():
+        """Проверить выбранный механизм приёма файлов из Проводника."""
+        import ctypes
 
-        if not win_dnd.ole2_dnd_enabled():
-            raise RuntimeError(
-                f"{win_dnd.OLE2_ENV} не задан — Проводник не сможет бросить файл"
-            )
-        return win_dnd.OLE2_ENV
+        from eves_text import win_dnd, win_drop
 
-    results.append(check("OLE2 DnD", ole2_dnd))
+        if not win_dnd.use_native_file_drop():
+            if not win_dnd.ole2_dnd_enabled():
+                raise RuntimeError(
+                    f"{win_dnd.OLE2_OPT_IN_ENV} задан, но {win_dnd.OLE2_ENV} не включён"
+                )
+            return f"experimental OLE2 ({win_dnd.OLE2_ENV})"
+
+        user32 = ctypes.windll.user32
+        shell32 = ctypes.windll.shell32
+        for library, names in (
+            (user32, ("CallWindowProcW", "DefWindowProcW")),
+            (shell32, ("DragAcceptFiles", "DragQueryFileW", "DragFinish")),
+        ):
+            for name in names:
+                if not hasattr(library, name):
+                    raise RuntimeError(f"нет {name}")
+        win_drop._libraries()
+        return "WM_DROPFILES, DragQueryFileW, DragFinish, SetWindowLongPtrW"
+
+    results.append(check("DnD файлов", file_dnd))
 
     def loaders():
         import gi
