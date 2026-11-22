@@ -302,6 +302,8 @@ def main() -> int:
             gi.require_version("GtkSource", "4")
             from gi.repository import Gtk, GtkSource
 
+            from eves_text import win_com_drop, win_theme
+
             win = Gtk.Window(title="Eve's Text — проверка")
             view = GtkSource.View()
             view.get_buffer().set_text("Проверка окна: собака, сабака.")
@@ -309,9 +311,27 @@ def main() -> int:
             win.set_default_size(480, 200)
             win.connect("destroy", Gtk.main_quit)
             win.show_all()
+
+            # Реально регистрируем IDropTarget на HWND окна: одного наличия
+            # функций Ole32 ещё недостаточно, dropout может не сработать.
+            gdk_window = win.get_window()
+            if gdk_window is None:
+                raise RuntimeError("у окна нет GdkWindow")
+            hwnd = win_theme.gdk_window_handle(gdk_window)
+            if not hwnd:
+                raise RuntimeError("не удалось получить HWND окна")
+            drop = win_com_drop.ComFileDrop(lambda _paths: None)
+            try:
+                drop.install(hwnd)
+                if not drop.installed:
+                    raise RuntimeError("RegisterDragDrop не зарегистрировал окно")
+                registered = f"COM IDropTarget зарегистрирован (HWND={hwnd})"
+            finally:
+                drop.uninstall()
+
             GLib.timeout_add_seconds(3, Gtk.main_quit)
             Gtk.main()
-            return "окно открылось"
+            return f"окно открылось, {registered}"
 
         results.append(check("окно", show_window))
 
