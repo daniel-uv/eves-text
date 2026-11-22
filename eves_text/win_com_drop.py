@@ -162,6 +162,8 @@ def _libraries():
 
     ole32 = ctypes.windll.ole32  # type: ignore[attr-defined]
     shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    user32 = ctypes.windll.user32  # type: ignore[attr-defined]
 
     ole32.OleInitialize.argtypes = [ctypes.c_void_p]
     ole32.OleInitialize.restype = HRESULT
@@ -173,14 +175,14 @@ def _libraries():
     ole32.RevokeDragDrop.restype = HRESULT
     ole32.ReleaseStgMedium.argtypes = [ctypes.POINTER(STGMEDIUM)]
     ole32.ReleaseStgMedium.restype = None
-    ole32.GlobalLock.argtypes = [ctypes.c_void_p]
-    ole32.GlobalLock.restype = ctypes.c_void_p
-    ole32.GlobalUnlock.argtypes = [ctypes.c_void_p]
-    ole32.GlobalUnlock.restype = ctypes.c_int
-    ole32.GlobalSize.argtypes = [ctypes.c_void_p]
-    ole32.GlobalSize.restype = ctypes.c_size_t
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.restype = ctypes.c_int
+    kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalSize.restype = ctypes.c_size_t
 
-    register_format = ole32.RegisterClipboardFormatW
+    register_format = user32.RegisterClipboardFormatW
     register_format.argtypes = [ctypes.c_wchar_p]
     register_format.restype = ctypes.c_uint
 

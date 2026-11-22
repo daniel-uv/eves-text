@@ -156,6 +156,8 @@ def main() -> int:
         if not win_dnd.use_com_file_drop():
             raise RuntimeError("COM DnD должен быть включён в Windows")
 
+        import ctypes
+
         ole32, shell32, cf_shell, cf_file = win_com_drop._libraries()
         for library, names in (
             (
@@ -168,6 +170,8 @@ def main() -> int:
                 ),
             ),
             (shell32, ("SHGetPathFromIDListW", "DragQueryFileW")),
+            (ctypes.windll.kernel32, ("GlobalLock", "GlobalUnlock", "GlobalSize")),
+            (ctypes.windll.user32, ("RegisterClipboardFormatW",)),
         ):
             for name in names:
                 if not hasattr(library, name):
