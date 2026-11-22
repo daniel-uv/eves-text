@@ -22,6 +22,12 @@
 Каретка ввода мигает, как обычно, но рисуется отдельно от штатной каретки GTK:
 так на Windows не остаётся светлого пикселя на её конце.
 
+Файлы из Проводника принимаются через стандартный OLE2-механизм Windows
+(`IDropTarget`). GDK получает `CFSTR_SHELLIDLIST` и превращает его в список URI,
+поэтому файл можно бросать и в поле ввода, и на полосу вкладок. Для этого при
+запуске включается `GDK_WIN32_USE_EXPERIMENTAL_OLE2_DND`; проверка рантайма
+показывает его состояние.
+
 ## Как запускать
 
 - Обычный запуск — `Eve's Text.exe` в папке программы или ярлык в меню «Пуск».
@@ -165,7 +171,7 @@ Eve's Text\
 5. Установщик (по желанию, нужен [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
    ```bat
-   ISCC.exe /DMyAppVersion=0.6.53 windows\eves-text.iss
+   ISCC.exe /DMyAppVersion=0.6.54 windows\eves-text.iss
    ```
 
    Готовый файл — `windows\dist-installer\EvesText-<версия>-win64-setup.exe`.

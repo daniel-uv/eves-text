@@ -1218,6 +1218,8 @@ def test_drag_and_drop(app: Application) -> None:
             first = window._active_tab
             assert first is not None
             assert first.is_pristine()
+            # Бросок на полосу вкладок тоже должен попадать в обработчик.
+            assert window.tab_strip_event.drag_dest_get_target_list() is not None
 
             with tempfile.TemporaryDirectory() as tmp:
                 one = Path(tmp) / "первый.txt"
@@ -1313,83 +1315,19 @@ def test_drag_and_drop(app: Application) -> None:
         user_settings.save = original_save
 
 
-def test_win_drop_hdrop_parsing() -> None:
-    """Пути из нативного HDROP читаются с Unicode и пробелами в имени."""
-    from eves_text import win_drop
+def test_win_ole2_dnd_enabled() -> None:
+    """В Windows включаем стандартный OLE2 DnD до инициализации GDK."""
+    from eves_text import win_dnd
 
-    class FakeShell:
-        def __init__(self, files: list[str]) -> None:
-            self.files = files
+    with mock.patch.object(os, "name", "nt"):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(win_dnd.OLE2_ENV, None)
+            win_dnd.enable_ole2_dnd()
+            assert win_dnd.ole2_dnd_enabled()
+            assert os.environ[win_dnd.OLE2_ENV] == "1"
 
-        def DragQueryFileW(self, _hdrop, index, buffer, size):
-            if index == 0xFFFFFFFF:
-                return len(self.files)
-            value = self.files[index]
-            if buffer is None:
-                return len(value)
-            buffer.value = value
-            return len(value)
-
-    class FinishShell(FakeShell):
-        def __init__(self, files: list[str]) -> None:
-            super().__init__(files)
-            self.finished: list[int] = []
-
-        def DragFinish(self, hdrop) -> None:
-            self.finished.append(hdrop)
-
-    shell = FakeShell(
-        [r"C:\Users\Jean\первый файл.txt", r"C:\Users\Jean\документ.rtf", ""]
-    )
-    paths = win_drop.dropped_paths_from_hdrop(42, shell)
-    assert paths == [r"C:\Users\Jean\первый файл.txt", r"C:\Users\Jean\документ.rtf"]
-
-    finish_shell = FinishShell([r"C:\Users\Jean\файл.txt"])
-    received: list[list[str]] = []
-    user32 = mock.Mock()
-    with mock.patch.object(win_drop, "_libraries", return_value=(user32, finish_shell)):
-        with mock.patch.object(win_drop, "dropped_paths_from_hdrop", return_value=[]):
-            win_drop._windows[1] = (123, received.append)
-            try:
-                assert win_drop._window_proc(1, win_drop._WM_DROPFILES, 77, 0) == 0
-            finally:
-                win_drop._windows.pop(1, None)
-    assert finish_shell.finished == [77]
-    assert received == []
-
-
-def test_native_drop_opens_new_tab(app: Application) -> None:
-    """Нативный бросок открывает файл рядом, не меняя текст текущей вкладки."""
-    from eves_text import settings as user_settings
-
-    original_load = user_settings.load
-    original_save = user_settings.save
-    user_settings.load = lambda: {}
-    user_settings.save = lambda data: None
-
-    try:
-        window = MainWindow(application=app)
-        try:
-            opened = window._active_tab
-            assert opened is not None
-            window.set_text("Текущий текст документа", None)
-            original = window.get_text()
-
-            with tempfile.TemporaryDirectory() as tmp:
-                path = Path(tmp) / "из проводника.txt"
-                path.write_text("Файл из Проводника", encoding="utf-8")
-                assert window._open_native_dropped_paths([str(path)]) is False
-
-            assert len(window._tabs) == 2
-            assert window._active_tab is not opened
-            assert window.get_text() == "Файл из Проводника"
-            start, end = opened.buffer.get_bounds()
-            assert opened.buffer.get_text(start, end, True) == original
-        finally:
-            window.destroy()
-    finally:
-        user_settings.load = original_load
-        user_settings.save = original_save
+    with mock.patch.dict(os.environ, {win_dnd.OLE2_ENV: "0"}):
+        assert not win_dnd.ole2_dnd_enabled()
 
 
 def test_settings(app: Application) -> None:

@@ -27,7 +27,7 @@ from gi.repository import (  # noqa: E402
     Pango,
 )
 
-from . import __version__, ai_check, document, updates, win_drop, win_theme  # noqa: E402
+from . import __version__, ai_check, document, updates, win_theme  # noqa: E402
 from . import settings as user_settings  # noqa: E402
 from .caret import CaretBlinker  # noqa: E402
 from .ollama_server import (  # noqa: E402
@@ -533,7 +533,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self._line_numbers = False
         self._highlight_line = True
         self._spell_check = True
-        self._native_drop: win_drop.NativeFileDrop | None = None
 
         config = user_settings.load()
         saved_size = config.get("font_size")
@@ -1161,6 +1160,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self.tab_strip_event.connect(
             "button-press-event", self._on_tab_strip_clicked
         )
+        # У EventBox своё GDK-окно: без явной цели бросок на полосу вкладок
+        # может не дойти до главного окна.
+        self._setup_drop_target(self.tab_strip_event)
 
         strip = Gtk.ScrolledWindow()
         strip.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
@@ -3164,27 +3166,6 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_map(self, *_args) -> None:
         self._apply_windows_titlebar()
         self._apply_titlebar_variant()
-        self._install_native_file_drop()
-
-    def _install_native_file_drop(self) -> None:
-        """Включить нативный приём файлов в Windows до обработки GDK."""
-        if os.name != "nt" or self._native_drop is not None:
-            return
-        gdk_window = self.get_window()
-        if gdk_window is None:
-            return
-        self._native_drop = win_drop.install_for_window(
-            self._on_native_files_dropped, gdk_window
-        )
-
-    def _on_native_files_dropped(self, paths: list[str]) -> None:
-        """Открыть файлы из ``WM_DROPFILES`` в новых вкладках."""
-        GLib.idle_add(self._open_native_dropped_paths, list(paths))
-
-    def _open_native_dropped_paths(self, paths: list[str]) -> bool:
-        """Открыть paths, не изменяя текст уже открытого документа."""
-        self._open_dropped_uris(paths)
-        return False
 
     def _apply_titlebar_variant(self, window: Gtk.Window | None = None) -> None:
         """Сообщает WM вариант рамки окна: светлый или тёмный.
@@ -3783,9 +3764,6 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_destroy(self, *_args) -> None:
         """Останавливает скачивание и отдельную службу при закрытии окна."""
-        if self._native_drop is not None:
-            self._native_drop.uninstall()
-            self._native_drop = None
         self._destroyed = True
         self._stop_tab_animation()
         self._cancel_tab_drag()
