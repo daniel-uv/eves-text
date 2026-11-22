@@ -149,6 +149,26 @@ def main() -> int:
 
     results.append(check("шрифт", font))
 
+    def native_drop_api():
+        """Нативный приём файлов: нужные Win32-функции доступны в рантайме."""
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        shell32 = ctypes.windll.shell32
+        from eves_text import win_drop
+
+        for library, names in (
+            (user32, ("CallWindowProcW", "DragAcceptFiles", "DefWindowProcW")),
+            (shell32, ("DragQueryFileW", "DragFinish")),
+        ):
+            for name in names:
+                if not hasattr(library, name):
+                    raise RuntimeError(f"нет {name}")
+        win_drop._libraries()
+        return "WM_DROPFILES, DragQueryFileW, SetWindowLongPtrW"
+
+    results.append(check("нативный DnD", native_drop_api))
+
     def loaders():
         import gi
 
