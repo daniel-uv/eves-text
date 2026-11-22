@@ -63,10 +63,14 @@ TEXT_FORMAT_KEYS = ("bold", "italic", "underline")
 DND_URI_LIST = 100
 DND_UTF8_STRING = 101
 DND_TEXT_PLAIN = 102
+DND_SHELL_ID_LIST = 103
 DND_TARGETS: tuple[tuple[str, int], ...] = (
     ("text/uri-list", DND_URI_LIST),
     ("UTF8_STRING", DND_UTF8_STRING),
     ("text/plain", DND_TEXT_PLAIN),
+    # Проводник Windows через OLE2 отдаёт CFSTR_SHELLIDLIST; GDK может
+    # транслировать его в text/uri-list, но цель принимаем для совместимости.
+    ("Shell IDList Array", DND_SHELL_ID_LIST),
 )
 
 # Класс, который ставим на кнопку вручную: в GTK3 псевдокласс :hover
@@ -1802,7 +1806,9 @@ class MainWindow(Gtk.ApplicationWindow):
             for name, info in DND_TARGETS
         ]
         widget.drag_dest_set(
-            Gtk.DestDefaults.MOTION | Gtk.DestDefaults.HIGHLIGHT,
+            # MOTION по умолчанию убран: с OLE2 GDK Win32 он может отклонить бросок
+            # до нашего обработчика, если не нашёл общую цель. Статус ставим сами.
+            Gtk.DestDefaults.HIGHLIGHT,
             targets,
             Gdk.DragAction.COPY | Gdk.DragAction.MOVE | Gdk.DragAction.LINK,
         )
@@ -1815,7 +1821,19 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_drag_motion(self, _widget, context, _x, _y, time) -> bool:
         """Принять бросок как копирование — курсор не должен быть «запрет»."""
-        Gdk.drag_status(context, Gdk.DragAction.COPY, time)
+        action = Gdk.DragAction.COPY
+        if context is not None:
+            try:
+                actions = context.get_actions()
+                if actions & Gdk.DragAction.COPY:
+                    action = Gdk.DragAction.COPY
+                elif actions & Gdk.DragAction.MOVE:
+                    action = Gdk.DragAction.MOVE
+                elif actions & Gdk.DragAction.LINK:
+                    action = Gdk.DragAction.LINK
+            except Exception:  # noqa: BLE001
+                pass
+        Gdk.drag_status(context, action, time)
         return True
 
     def _on_drag_drop(self, widget, context, _x, _y, time) -> bool:
