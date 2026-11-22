@@ -367,7 +367,11 @@ def _enum_data_formats(data_object) -> set[int]:
                 entries,
                 ctypes.byref(fetched),
             )
-            if result != S_OK or not fetched.value:
+            # IEnumFORMATETC::Next возвращает S_FALSE, когда форматов меньше,
+            # чем запрошено (Проводник отдаёт 3–8, а мы просим 32). Такие
+            # результаты нельзя выбрасывать: из-за этого DragEnter отвечал
+            # DROPEFFECT_NONE, и Windows не вызывала Drop.
+            if result not in (S_OK, S_FALSE) or not fetched.value:
                 break
             formats.update(entries[index].cfFormat for index in range(fetched.value))
             if fetched.value < 32:
@@ -497,19 +501,13 @@ class ComFileDrop:
         return self._ref_count
 
     def _effect_for(self, data_object) -> int:
-        if not data_object:
-            return DROPEFFECT_NONE
-        try:
-            ole32, _shell32, cf_shell, cf_file = _libraries()
-            formats = _enum_data_formats(data_object)
-            candidates = (cf_shell, CF_HDROP, cf_file)
-            if any(fmt in formats for fmt in candidates):
-                return DROPEFFECT_COPY
-            if any(_has_format(data_object, fmt) for fmt in candidates):
-                return DROPEFFECT_COPY
-        except Exception:  # noqa: BLE001
-            return DROPEFFECT_NONE
-        return DROPEFFECT_NONE
+        """Разрешить бросок: Windows спросит эффект до вызова Drop.
+
+        Проверять форматы здесь ненадёжно: источник может не ответить на
+        QueryGetData до начала броска. Если IDataObject есть — принимаем
+        копирование, а реальные пути разбираем уже в ``Drop``.
+        """
+        return DROPEFFECT_COPY if data_object else DROPEFFECT_NONE
 
     def _drag_enter(self, _this, data_object, _keys, _point, effect) -> int:
         effect[0] = self._effect_for(data_object)

@@ -1441,6 +1441,39 @@ def test_com_drop_registration() -> None:
         assert 321 not in win_com_drop._targets
 
 
+def test_com_drop_enum_s_false() -> None:
+    """Проводник возвращает S_FALSE с форматами: их нельзя терять."""
+    import ctypes
+
+    from eves_text import win_com_drop
+
+    enum = ctypes.c_void_p(1)
+
+    def fake_call(_pointer, index, _restype, _argtypes, *args):
+        if index == 8:  # IDataObject::EnumFormatEtc
+            ctypes.cast(args[1], ctypes.POINTER(ctypes.c_void_p))[0] = enum
+            return win_com_drop.S_OK
+        if index == 3:  # IEnumFORMATETC::Next
+            entries, fetched = args[1], args[2]
+            entries[0].cfFormat = win_com_drop.CF_HDROP
+            entries[1].cfFormat = 100
+            ctypes.cast(fetched, ctypes.POINTER(win_com_drop.ULONG))[0] = 2
+            return win_com_drop.S_FALSE
+        return win_com_drop.S_OK
+
+    with mock.patch.object(win_com_drop, "_com_call", side_effect=fake_call):
+        assert win_com_drop._enum_data_formats(object()) == {
+            win_com_drop.CF_HDROP,
+            100,
+        }
+
+    # Наличие IDataObject уже достаточно, чтобы разрешить бросок: окончательные
+    # форматы проверяются в Drop, а не в DragEnter.
+    drop = win_com_drop.ComFileDrop(lambda _paths: None)
+    assert drop._effect_for(object()) == win_com_drop.DROPEFFECT_COPY
+    assert drop._effect_for(None) == win_com_drop.DROPEFFECT_NONE
+
+
 def test_com_drop_opens_new_tab(app: Application) -> None:
     """COM-бросок открывает файл рядом, не меняя текст текущей вкладки."""
     from eves_text import settings as user_settings
@@ -1626,6 +1659,7 @@ if __name__ == "__main__":
     test_drag_and_drop(test_app)
     test_com_drop_parsing()
     test_com_drop_registration()
+    test_com_drop_enum_s_false()
     test_com_drop_opens_new_tab(test_app)
     test_win_dnd_mode()
     test_settings(test_app)
