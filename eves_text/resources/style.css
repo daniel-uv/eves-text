@@ -207,27 +207,62 @@ menubar menuitem.force-hover {
   color: #9a9a9a;
 }
 
+/* В Windows-бандле тема GTK рисует кнопки градиентом surface. Один только
+   background-color его не перекрывает: кнопка остаётся светлой, а текст
+   от тёмной темы — белым. Выключаем картинку фона явно и красин label. */
+.empty-state button,
+.empty-state button label {
+  background-image: none;
+  box-shadow: none;
+  color: #202124;
+}
+
 .empty-state button {
   min-width: 210px;
   min-height: 36px;
   border: 1px solid #dadce0;
   border-radius: 18px;
-  box-shadow: none;
   background-color: #ffffff;
+  background-image: none;
+  box-shadow: none;
   color: #202124;
+}
+
+.dark-theme .empty-state button,
+.dark-theme .empty-state button label {
+  background-image: none;
+  color: #e3e3e3;
 }
 
 .dark-theme .empty-state button {
   border-color: #3c4043;
   background-color: #303134;
+  background-image: none;
+  box-shadow: none;
   color: #e3e3e3;
 }
 
-.empty-state button:hover {
+.empty-state button:hover,
+.empty-state button:hover label {
+  background-image: none;
   background-color: #f1f3f4;
 }
 
-.dark-theme .empty-state button:hover {
+.dark-theme .empty-state button:hover,
+.dark-theme .empty-state button:hover label {
+  background-image: none;
+  background-color: #3c4043;
+}
+
+.empty-state button:active,
+.empty-state button:focus {
+  background-image: none;
+  box-shadow: none;
+}
+
+.dark-theme .empty-state button:active,
+.dark-theme .empty-state button:focus {
+  background-image: none;
   background-color: #3c4043;
 }
 

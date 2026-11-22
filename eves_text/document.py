@@ -109,6 +109,41 @@ def is_rtf(path: str | os.PathLike) -> bool:
     return Path(path).suffix.lower() == ".rtf"
 
 
+_RTF_SIGNATURES = (b"{\\rtf", b"{\\urtf")  # \urtf — RTF 1.9 из Word 2007+
+_UTF8_BOM = b"\xef\xbb\xbf"
+# Кодировки для \'hh из RTF-файлов, пришедших из Word/Writer.
+_RTF_CODECS = {
+    1250: "cp1250",
+    1251: "cp1251",
+    1252: "cp1252",
+    866: "cp866",
+    65001: "latin-1",  # один байт не образует UTF-8-символ
+}
+
+
+def _decode_rtf(raw: bytes) -> str | None:
+    """Вернуть исходник RTF, если содержимое файла — RTF, иначе None.
+
+    Полагаться только на расширение нельзя: BOM, UTF-16 или оформление,
+    сохранённое в .txt, заставляют редактор показать сырой код вместо текста.
+    """
+    if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+        try:
+            source = raw.decode("utf-16")
+        except UnicodeDecodeError:
+            return None
+        stripped = source.lstrip()
+        return source if stripped.startswith(("{\\rtf", "{\\urtf")) else None
+
+    payload = raw[len(_UTF8_BOM) :] if raw.startswith(_UTF8_BOM) else raw
+    if not payload.lstrip().startswith(_RTF_SIGNATURES):
+        return None
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return payload.decode("cp1251", errors="replace")
+
+
 def read_document(path: str | os.PathLike) -> tuple[str, str, list[Span]]:
     """Прочитать документ вместе с оформлением.
 
@@ -116,15 +151,10 @@ def read_document(path: str | os.PathLike) -> tuple[str, str, list[Span]]:
     оформления пуст; для RTF он содержит диапазоны с начертанием/размером/выравниванием.
     """
     file = Path(path)
-    if file.suffix.lower() == ".rtf":
-        raw = file.read_bytes()
-        if raw.lstrip()[:5] == rb"{\rtf":
-            try:
-                source = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                source = raw.decode("cp1251", errors="replace")
-            text, spans = _parse_rtf(source)
-            return text, "RTF", spans
+    source = _decode_rtf(file.read_bytes())
+    if source is not None:
+        text, spans = _parse_rtf(source)
+        return text, "RTF", spans
     text, encoding = read_text(file)
     return text, encoding, []
 
@@ -160,24 +190,42 @@ def write_document(
 def _parse_rtf(source: str) -> tuple[str, list[Span]]:
     """Разобрать поддерживаемое подмножество RTF в текст и диапазоны атрибутов."""
     state: dict[str, object] = dict(_DEFAULT_ATTRS)
-    stack: list[tuple[dict[str, object], int, int]] = []
+    stack: list[tuple[dict[str, object], int, int, int]] = []
     chars: list[str] = []
     attrs: list[dict[str, object]] = []
     skip = 0
     uc = 1
+    codepage = 1251
     ignored_level: int | None = None
     i = 0
     size = len(source)
+
+    def append(value: str) -> None:
+        if ignored_level is None:
+            chars.append(value)
+            attrs.append(state.copy())
+
     while i < size:
         ch = source[i]
+
+        # Резервное представление после \uN: \'hh считается одной единицей.
+        # Проверяем его до разбора команд, иначе hex-цифры утекут в текст.
+        if skip > 0 and ignored_level is None:
+            if ch == "\\" and i + 1 < size and source[i + 1] == "'":
+                i += 4 if i + 3 < size else size - i
+            else:
+                i += 1
+            skip -= 1
+            continue
+
         if ch == "{":
-            stack.append((state.copy(), skip, uc))
+            stack.append((state.copy(), skip, uc, codepage))
             state = state.copy()
             i += 1
             continue
         if ch == "}":
             if stack:
-                state, skip, uc = stack.pop()
+                state, skip, uc, codepage = stack.pop()
             if ignored_level is not None and len(stack) < ignored_level:
                 ignored_level = None
             i += 1
@@ -198,12 +246,13 @@ def _parse_rtf(source: str) -> tuple[str, list[Span]]:
                     ignored_level = max(1, len(stack))
                 elif word == "uc":
                     uc = param or 0
+                elif word == "ansicpg" and param is not None:
+                    codepage = param
                 elif word == "u" and param is not None:
                     code = param & 0xFFFF
                     if code >= 0x8000:
                         code -= 0x10000
-                    chars.append(chr(code))
-                    attrs.append(state.copy())
+                    append(chr(code))
                     skip = uc
                 elif word == "b":
                     state["bold"] = (param if param is not None else 1) != 0
@@ -221,35 +270,38 @@ def _parse_rtf(source: str) -> tuple[str, list[Span]]:
                     state["align"] = None
                 elif word == "plain":
                     state = dict(_DEFAULT_ATTRS)
-                elif word == "par":
-                    if ignored_level is None:
-                        chars.append("\n")
-                        attrs.append(state.copy())
-                elif word == "*":
-                    ignored_level = len(stack) + 1
+                elif word in ("par", "line"):
+                    append("\n")
+                elif word == "tab":
+                    append("\t")
                 continue
-            # control symbol: \*, \\, \{, \}
+            # control symbol: \*, \\, \{, \}, \', \~
             symbol = source[i]
             if symbol == "*":
                 # {\*...} — служебная группа (таблица шрифтов, цветов,
                 # генератор и т.п.). Её содержимое не является текстом.
                 ignored_level = max(1, len(stack))
-            elif ignored_level is None and symbol in "\\{} ":
-                # "\ " — явный пробел, который не должен съесться как
-                # разделитель после управляющего слова.
-                chars.append(symbol)
-                attrs.append(state.copy())
-            i += 1
-            continue
-        if skip > 0:
-            skip -= 1
+            elif symbol == "'" and i + 2 < size:
+                try:
+                    byte = int(source[i + 1 : i + 3], 16)
+                    append(
+                        bytes((byte,)).decode(
+                            _RTF_CODECS.get(codepage, "cp1251"), errors="replace"
+                        )
+                    )
+                except ValueError:
+                    pass
+                i += 3
+                continue
+            elif ignored_level is None and symbol in "\\{} ~":
+                # "\ " — явный пробел, "\~" — неразрывный пробел.
+                append("\u00a0" if symbol == "~" else symbol)
             i += 1
             continue
         if ignored_level is not None or ch in "\r\n":
             i += 1
             continue
-        chars.append(ch)
-        attrs.append(state.copy())
+        append(ch)
         i += 1
 
     text = "".join(chars)
@@ -285,7 +337,9 @@ def _escape_rtf(value: str) -> str:
     out: list[str] = []
     for ch in value:
         if ch == "\n":
-            out.append(r"\par\n")
+            # В RTF перевод строки в исходнике — пробел; \n как управляющее
+            # слово не существует и мешает другим редакторам.
+            out.append("\\par\n")
         elif ch in "\\{}":
             out.append("\\" + ch)
         elif ch == " ":

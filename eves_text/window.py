@@ -1816,12 +1816,26 @@ class MainWindow(Gtk.ApplicationWindow):
         return True
 
     def _on_drag_drop(self, widget, context, _x, _y, time) -> bool:
-        """Запросить данные броска у источника."""
-        target = widget.drag_dest_find_target(context, None)
+        """Запросить данные броска у источника.
+
+        Файл с рабочего стола или из папки должен открываться и когда его
+        бросают прямо в поле ввода уже открытого документа. GDK Win32 не
+        всегда сообщает цели источника, поэтому если URI есть в списке,
+        запрашиваем именно его — иначе GtkTextView может забрать бросок
+        как обычный текст и вставить путь в документ.
+        """
+        uri_atom = Gdk.atom_intern(DND_TARGETS[0][0], False)
+        source_targets: list[Gdk.Atom] = []
+        if context is not None:
+            try:
+                source_targets = list(context.list_targets())
+            except Exception:  # noqa: BLE001
+                source_targets = []
+        target = uri_atom if uri_atom in source_targets else None
         if target is None:
-            # GDK Win32 не всегда сообщает цели проводника. Явно запрашиваем
-            # URI-список — именно в нём приходит файл из Проводника.
-            target = Gdk.atom_intern(DND_TARGETS[0][0], False)
+            target = widget.drag_dest_find_target(context, None)
+        if target is None:
+            target = uri_atom
         widget.drag_get_data(context, target, time)
         return True
 
@@ -3849,6 +3863,13 @@ class MainWindow(Gtk.ApplicationWindow):
                 position = found
             buffer.insert_interactive(position, text, True)
             handled = True
+        if handled and context is not None:
+            # Встроенный обработчик GtkTextView иначе может вставить URI
+            # или текст файла прямо в редактируемый документ.
+            try:
+                GObject.signal_stop_emission_by_name(widget, "drag-data-received")
+            except Exception:  # noqa: BLE001
+                pass
         Gtk.drag_finish(context, handled, False, time)
         # Событие не должно уйти родительскому виджету: иначе один и тот же
         # файл откроется дважды — с поля ввода и сразу с окна.

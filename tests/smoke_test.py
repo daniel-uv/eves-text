@@ -86,6 +86,37 @@ def test_document_rtf() -> None:
         loaded, encoding, loaded_spans = document.read_document(plain)
         assert loaded == text and encoding == "UTF-8" and loaded_spans == []
 
+        # Файл определяется как RTF по содержимому, а не только по имени.
+        # BOM, UTF-16 и оформление в .txt раньше показывали сырой код.
+        raw = path.read_bytes()
+        with_bom = Path(tmp) / "с-bom.rtf"
+        with_bom.write_bytes(b"\xef\xbb\xbf" + raw)
+        loaded, encoding, _loaded_spans = document.read_document(with_bom)
+        assert loaded == text and encoding == "RTF", repr(loaded[:40])
+
+        utf16 = Path(tmp) / "utf16.rtf"
+        utf16.write_bytes(raw.decode("ascii").encode("utf-16"))
+        loaded, encoding, _loaded_spans = document.read_document(utf16)
+        assert loaded == text and encoding == "RTF", repr(loaded[:40])
+
+        urtf = Path(tmp) / "urtf.rtf"
+        urtf.write_bytes(raw.replace(b"{\\rtf", b"{\\urtf", 1))
+        loaded, encoding, _loaded_spans = document.read_document(urtf)
+        assert loaded == text and encoding == "RTF", repr(loaded[:40])
+
+        formatted_txt = Path(tmp) / "оформление-без-расширения.txt"
+        document.write_document(formatted_txt, text, spans)
+        loaded, encoding, _loaded_spans = document.read_document(formatted_txt)
+        assert loaded == text and encoding == "RTF", repr(loaded[:40])
+
+        # Реальные RTF из Word используют \'hh и резервные символы после \uN.
+        word_source = (
+            r"{\rtf1\ansi\ansicpg1251\uc1\fs24 "
+            r"\'ED\'EC\'E8 \u1055\'ff \par}"
+        )
+        loaded, _word_spans = document._parse_rtf(word_source)
+        assert loaded == "нми П \n", repr(loaded)
+
 
 def test_updates() -> None:
     assert updates.tag_version("v0.6.5") == "0.6.5"
@@ -278,8 +309,22 @@ def test_dark_scheme() -> None:
         ".empty-state",
         ".dark-theme .empty-state",
         ".empty-state button",
+        ".empty-state button label",
+        ".dark-theme .empty-state button label",
     ):
         assert selector in css
+
+    # На Windows тема рисует кнопки градиентом: без явного background-image
+    # кнопки остаются светлыми, а текст от тёмной темы — белым.
+    def css_block(selector: str) -> str:
+        start = css.index(selector)
+        brace = css.index("{", start)
+        return css[brace + 1 : css.index("}", brace)]
+
+    dark_button = css_block(".dark-theme .empty-state button {")
+    assert "background-color: #303134" in dark_button
+    assert "background-image: none" in dark_button
+    assert "color: #e3e3e3" in dark_button
 
     # Выпадающие списки и меню живут в отдельных окнах: для них нужен
     # глобальный тёмный CSS, а не только класс .dark-theme на главном окне.
@@ -1218,6 +1263,43 @@ def test_drag_and_drop(app: Application) -> None:
                     )
                 assert len(window._tabs) == 6
                 assert window.get_text() == "Содержимое второго"
+
+                # Бросок прямо в поле ввода уже открытого документа: файл
+                # открывается рядом, а текст текущей вкладки не портится.
+                from gi.repository import GObject
+
+                opened = window._active_tab
+                assert opened is not None
+                original = window.get_text()
+                third = Path(tmp) / "третий.txt"
+                third.write_text("Брошено в открытый документ", encoding="utf-8")
+                uri_three = Gio.File.new_for_path(str(third)).get_uri()
+                with mock.patch.object(Gtk, "drag_finish"), mock.patch.object(
+                    GObject, "signal_stop_emission_by_name"
+                ) as stop:
+                    handled = window._on_drag_data(
+                        opened.view, mock.Mock(), 0, 0,
+                        FakeSelectionData(uri_three.encode("utf-8")),
+                        DND_URI_LIST, 0,
+                    )
+                assert handled is True
+                assert stop.call_count == 1
+                assert len(window._tabs) == 7
+                assert window._active_tab is not opened
+                assert window.get_text() == "Брошено в открытый документ"
+                start, end = opened.buffer.get_bounds()
+                assert opened.buffer.get_text(start, end, True) == original
+
+                # Если источник предлагает URI, запрашиваем именно его,
+                # даже когда find_target вернул текстовую цель.
+                source = mock.Mock()
+                uri_atom = Gdk.atom_intern("text/uri-list", False)
+                source.list_targets.return_value = [uri_atom]
+                with mock.patch.object(
+                    opened.view, "drag_dest_find_target", return_value=None
+                ), mock.patch.object(opened.view, "drag_get_data") as get_data:
+                    assert window._on_drag_drop(opened.view, source, 0, 0, 0) is True
+                assert get_data.call_args.args[1] == uri_atom
 
             # Пути Windows без хоста: file:///C:/... и /C:/...
             parsed = MainWindow._dropped_paths(
