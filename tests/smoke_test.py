@@ -1189,8 +1189,15 @@ def test_native_file_dialog_filters() -> None:
 
 def test_drag_and_drop(app: Application) -> None:
     """Бросок .txt открывает файл в новой вкладке — в любом формате данных."""
+    import struct
+
     from eves_text import settings as user_settings
-    from eves_text.window import DND_TARGETS, DND_TEXT_PLAIN, DND_URI_LIST
+    from eves_text.window import (
+        DND_HDROP,
+        DND_TARGETS,
+        DND_TEXT_PLAIN,
+        DND_URI_LIST,
+    )
 
     # Явный Win32-формат отключает в GDK автоматический CFSTR_SHELLIDLIST →
     # text/uri-list; в OLE2-режиме он нам только мешает.
@@ -1296,6 +1303,17 @@ def test_drag_and_drop(app: Application) -> None:
                 start, end = opened.buffer.get_bounds()
                 assert opened.buffer.get_text(start, end, True) == original
 
+                # Проводник может отдать CF_HDROP — структуру DROPFILES.
+                files = str(third).encode("utf-16-le") + b"\x00\x00"
+                hdrop = struct.pack("<IiiII", 20, 0, 0, 0, 1) + files
+                with mock.patch.object(Gtk, "drag_finish"):
+                    handled = window._on_drag_data(
+                        window._active_tab.view, None, 0, 0,
+                        FakeSelectionData(hdrop), DND_HDROP, 0,
+                    )
+                assert handled is True
+                assert len(window._tabs) == 8
+
                 # Если источник предлагает URI, запрашиваем именно его,
                 # даже когда find_target вернул текстовую цель.
                 source = mock.Mock()
@@ -1312,6 +1330,16 @@ def test_drag_and_drop(app: Application) -> None:
                 "file:///C:/Users/Jean/a.txt\n/C:/Users/Jean/b.txt"
             )
             assert parsed == [Path("C:/Users/Jean/a.txt"), Path("C:/Users/Jean/b.txt")]
+
+            # DROPFILES в Unicode- и ANSI-варианте.
+            wide = "C:\\Users\\Jean\\файл.txt".encode("utf-16-le") + b"\x00\x00"
+            wide_raw = struct.pack("<IiiII", 20, 0, 0, 0, 1) + wide
+            assert MainWindow._hdrop_paths(wide_raw) == [
+                "C:\\Users\\Jean\\файл.txt"
+            ]
+            ansi = "C:\\Users\\Jean\\a.txt".encode("cp1251") + b"\x00"
+            ansi_raw = struct.pack("<IiiII", 20, 0, 0, 0, 0) + ansi
+            assert MainWindow._hdrop_paths(ansi_raw) == ["C:\\Users\\Jean\\a.txt"]
         finally:
             window.destroy()
     finally:
@@ -1799,19 +1827,33 @@ def test_native_drop_opens_new_tab(app: Application) -> None:
 
 
 def test_win_dnd_mode() -> None:
-    """В Windows OLE поднимается до GDK, GDK OLE2 выключен."""
-    from eves_text import win_com_drop, win_dnd
+    """В Windows штатный OLE2 GDK включается до Gtk.init()."""
+    from eves_text import win_dnd
 
-    with (
-        mock.patch.object(os, "name", "nt"),
-        mock.patch.dict(os.environ, {win_dnd.OLE2_ENV: "1"}, clear=False),
-        mock.patch.object(win_com_drop, "initialize_ole", return_value=True) as initialize,
-    ):
-        win_dnd.configure_dnd()
-        assert initialize.call_count == 1
-        assert win_dnd.use_com_file_drop() is True
-        # GDK смотрит на наличие переменной: "0" её не отключил бы.
-        assert win_dnd.OLE2_ENV not in os.environ
+    os.environ.pop(win_dnd.OLE2_ENV, None)
+    try:
+        with mock.patch.object(os, "name", "nt"):
+            win_dnd.configure_dnd()
+            assert win_dnd.use_gdk_file_drop() is True
+            assert win_dnd.ole2_dnd_enabled() is True
+            # GDK смотрит только на наличие переменной: "0" её не отключит.
+            assert os.environ[win_dnd.OLE2_ENV] == "1"
+
+        os.environ.pop(win_dnd.OLE2_ENV, None)
+        with mock.patch.object(os, "name", "posix"):
+            win_dnd.configure_dnd()
+            assert win_dnd.use_gdk_file_drop() is False
+            assert win_dnd.OLE2_ENV not in os.environ
+    finally:
+        os.environ.pop(win_dnd.OLE2_ENV, None)
+
+
+def test_com_drop_target_registered_non_windows() -> None:
+    """Проверка занятости HWND не трогает Win32 на других ОС."""
+    from eves_text import win_com_drop
+
+    assert win_com_drop.target_registered(0) is False
+    assert win_com_drop.DRAGDROP_E_ALREADYREGISTERED == -2147221247
 
 
 def test_settings(app: Application) -> None:
@@ -2105,6 +2147,7 @@ if __name__ == "__main__":
     test_native_drop_libraries_use_kernel32()
     test_native_drop_opens_new_tab(test_app)
     test_win_dnd_mode()
+    test_com_drop_target_registered_non_windows()
     test_window_geometry(test_app)
     test_find_text(test_app)
     test_search_bar_only_on_shortcut(test_app)

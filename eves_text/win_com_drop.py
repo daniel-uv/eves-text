@@ -1,17 +1,19 @@
-"""Собственный COM ``IDropTarget`` для файлов из Проводника Windows.
+"""Запасной COM ``IDropTarget`` для файлов из Проводника Windows.
 
-В Windows 11 файлы приходят как OLE-бросок. GDK-реализация работать отказалась,
-поэтому окно регистрирует свой ``IDropTarget`` прямо на своём HWND и читает
+Основной путь — OLE2-приёмник GDK (см. ``win_dnd``). Но если GDK почему-то
+не зарегистрировал ``IDropTarget`` на HWND, окно ставит свой: он читает
 данные у ``IDataObject`` источника. Основной формат — ``CFSTR_SHELLIDLIST``:
 из него собираются PIDL, а ``SHGetPathFromIDListW`` возвращает реальные пути.
 На всякий случай поддерживаются ``CF_HDROP`` и ``CFSTR_FILEDESCRIPTOR``.
 
+``ComFileDrop.install()`` сам поднимает OLE через ``OleInitialize()``, если
+GDK этого ещё не сделал. Если на HWND уже есть приёмник GDK,
+``RegisterDragDrop`` вернёт ``DRAGDROP_E_ALREADYREGISTERED`` и мы его не
+трогаем.
+
 Модуль не трогает Windows API на других ОС: разбор форматов можно проверять
 в тестах на Linux. Окно получает только список путей, открывает их уже
 существующий метод ``_open_dropped_uris()``.
-
-``initialize_ole()`` вызывается до Gtk.init(): GDK инициализирует COM через
-CoInitializeEx, а RegisterDragDrop требует предварительного OleInitialize.
 """
 
 from __future__ import annotations
@@ -32,6 +34,8 @@ S_FALSE = 1
 E_NOINTERFACE = _hr(0x80004002)
 E_FAIL = _hr(0x80004005)
 RPC_E_CHANGED_MODE = _hr(0x80010106)
+# На HWND уже есть чужой IDropTarget — в нашем случае OLE2-приёмник GDK.
+DRAGDROP_E_ALREADYREGISTERED = _hr(0x80040101)
 
 CF_HDROP = 15
 TYMED_HGLOBAL = 1
@@ -216,13 +220,12 @@ def _libraries():
 
 
 def initialize_ole() -> bool:
-    """Инициализировать OLE до GDK, который вызывает только CoInitializeEx.
+    """Инициализировать OLE перед ``RegisterDragDrop``.
 
-    Документация RegisterDragDrop требует, чтобы приложение с drag-and-drop
-    вызывало именно OleInitialize. GDK Win32 делает CoInitializeEx при
-    Gtk.init(); если OLE ещё не готов, RegisterDragDrop возвращает
-    E_OUTOFMEMORY, и броски не доходят до нашего IDropTarget. Поэтому
-    ``win_dnd.configure_dnd()`` вызывает эту функцию до Gtk.init().
+    Документация RegisterDragDrop требует именно OleInitialize, а не только
+    CoInitializeEx. В штатном режиме это делает GDK при Gtk.init(); вызов
+    здесь нужен для запасного пути и проверок рантайма. Повторный
+    OleInitialize возвращает S_FALSE и безопасен.
     """
     global _ole_initialized
     if _ole_initialized:
@@ -590,7 +593,7 @@ class ComFileDrop:
         ole32, _shell32, _cf_shell, _cf_file = _libraries()
         result = ole32.RegisterDragDrop(ctypes.c_void_p(hwnd), self._pointer)
         if result != S_OK:
-            raise ComDropError(f"RegisterDragDrop вернул {result:#x}")
+            raise ComDropError(f"RegisterDragDrop вернул {result:#x}", result)
         _targets[hwnd] = self
         self._hwnd = hwnd
         self._installed = True
@@ -629,3 +632,22 @@ def install_for_window(
     except ComDropError:
         return None
     return drop if drop.installed else None
+
+
+def target_registered(hwnd: int) -> bool:
+    """True, если на HWND уже зарегистрирован чужой ``IDropTarget``.
+
+    Используется проверкой рантайма: после ``drag_dest_set()`` GDK должен
+    занять HWND своим OLE2-приёмником. Если это так, наша попытка
+    ``RegisterDragDrop`` получит ``DRAGDROP_E_ALREADYREGISTERED``.
+    """
+    if os.name != "nt" or not hwnd:
+        return False
+    probe = ComFileDrop(lambda _paths: None)
+    try:
+        probe.install(hwnd)
+    except ComDropError as exc:
+        code = exc.args[1] if len(exc.args) > 1 else None
+        return code == DRAGDROP_E_ALREADYREGISTERED
+    probe.uninstall()
+    return False

@@ -54,11 +54,13 @@ def main() -> int:
     results: list[bool] = []
 
     def gtk_init():
-        # OLE и GDK инициализируются в строгом порядке: сначала наш
-        # OleInitialize, потом CoInitializeEx внутри Gtk.init().
+        # Переменную OLE2 GDK читает при Gtk.init(), поэтому выставляем её
+        # заранее — как это делает пакет при обычном запуске приложения.
         from eves_text import win_dnd
 
         win_dnd.configure_dnd()
+        if not win_dnd.use_gdk_file_drop():
+            raise RuntimeError("GDK_WIN32_USE_EXPERIMENTAL_OLE2_DND не выставлена")
 
         import gi
 
@@ -156,14 +158,20 @@ def main() -> int:
     results.append(check("шрифт", font))
 
     def file_dnd():
-        """Проверить регистрацию COM-приёмника на настоящем HWND окна."""
+        """Проверить штатную регистрацию OLE2-приёмника GDK на HWND окна.
+
+        ``drag_dest_set`` с целью ``text/uri-list`` заставляет GDK вызвать
+        ``RegisterDragDrop`` для окна. Наша попытка занять тот же HWND должна
+        получить ``DRAGDROP_E_ALREADYREGISTERED`` — это и есть доказательство,
+        что файлы из Проводника примет GDK, а не запасной COM-приёмник.
+        """
         from eves_text import win_com_drop, win_dnd, win_theme
 
-        if not win_dnd.use_com_file_drop():
-            raise RuntimeError("COM DnD должен быть включён в Windows")
+        if not win_dnd.use_gdk_file_drop():
+            raise RuntimeError("GDK OLE2 DnD не включён: не выставлена переменная")
 
         import ctypes
-        from gi.repository import Gtk
+        from gi.repository import Gdk, Gtk
 
         ole32, shell32, cf_shell, cf_file = win_com_drop._libraries()
         for library, names in (
@@ -186,6 +194,11 @@ def main() -> int:
 
         window = Gtk.Window()
         try:
+            window.drag_dest_set(
+                Gtk.DestDefaults.HIGHLIGHT,
+                [Gtk.TargetEntry.new("text/uri-list", 0, 0)],
+                Gdk.DragAction.COPY,
+            )
             window.realize()
             gdk_window = window.get_window()
             if gdk_window is None:
@@ -193,15 +206,13 @@ def main() -> int:
             hwnd = win_theme.gdk_window_handle(gdk_window)
             if not hwnd:
                 raise RuntimeError("не удалось получить HWND окна")
-            drop = win_com_drop.install_for_window(lambda _paths: None, gdk_window)
-            if drop is None or not drop.installed:
-                raise RuntimeError("RegisterDragDrop не зарегистрировал IDropTarget")
-            drop.uninstall()
+            if not win_com_drop.target_registered(hwnd):
+                raise RuntimeError("GDK не зарегистрировал OLE2 IDropTarget на HWND")
         finally:
             window.destroy()
 
         return (
-            f"COM IDropTarget на HWND {hwnd:#x}, "
+            f"GDK OLE2 IDropTarget на HWND {hwnd:#x}, "
             f"CFSTR_SHELLIDLIST={cf_shell}, CFSTR_FILEDESCRIPTOR={cf_file}"
         )
 
@@ -363,7 +374,7 @@ def main() -> int:
 
             gi.require_version("Gtk", "3.0")
             gi.require_version("GtkSource", "4")
-            from gi.repository import Gtk, GtkSource
+            from gi.repository import Gdk, Gtk, GtkSource
 
             from eves_text import win_com_drop, win_theme
 
@@ -371,26 +382,26 @@ def main() -> int:
             view = GtkSource.View()
             view.get_buffer().set_text("Проверка окна: собака, сабака.")
             win.add(view)
+            win.drag_dest_set(
+                Gtk.DestDefaults.HIGHLIGHT,
+                [Gtk.TargetEntry.new("text/uri-list", 0, 0)],
+                Gdk.DragAction.COPY,
+            )
             win.set_default_size(480, 200)
             win.connect("destroy", Gtk.main_quit)
             win.show_all()
 
-            # Реально регистрируем IDropTarget на HWND окна: одного наличия
-            # функций Ole32 ещё недостаточно, dropout может не сработать.
+            # После drag_dest_set() и показа окна HWND должен быть занят
+            # OLE2-приёмником GDK, иначе файлы из Проводника не дойдут.
             gdk_window = win.get_window()
             if gdk_window is None:
                 raise RuntimeError("у окна нет GdkWindow")
             hwnd = win_theme.gdk_window_handle(gdk_window)
             if not hwnd:
                 raise RuntimeError("не удалось получить HWND окна")
-            drop = win_com_drop.ComFileDrop(lambda _paths: None)
-            try:
-                drop.install(hwnd)
-                if not drop.installed:
-                    raise RuntimeError("RegisterDragDrop не зарегистрировал окно")
-                registered = f"COM IDropTarget зарегистрирован (HWND={hwnd})"
-            finally:
-                drop.uninstall()
+            if not win_com_drop.target_registered(hwnd):
+                raise RuntimeError("GDK не зарегистрировал OLE2 IDropTarget")
+            registered = f"GDK OLE2 IDropTarget зарегистрирован (HWND={hwnd})"
 
             GLib.timeout_add_seconds(3, Gtk.main_quit)
             Gtk.main()

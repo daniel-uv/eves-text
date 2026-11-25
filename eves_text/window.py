@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import struct
 import sys
 import threading
 import time
@@ -72,10 +73,16 @@ TEXT_FORMAT_KEYS = ("bold", "italic", "underline")
 DND_URI_LIST = 100
 DND_UTF8_STRING = 101
 DND_TEXT_PLAIN = 102
-# "Shell IDList Array" намеренно не объявляем: GDK не должен регистрировать
-# свой IDropTarget на том же HWND. В Windows файлы принимает наш COM-приёмник.
+DND_HDROP = 103
+# "Shell IDList Array" намеренно не объявляем. GDK Win32 сам предлагает
+# этот формат Проводнику для цели text/uri-list и превращает CFSTR_SHELLIDLIST
+# в URI. Если объявить формат ещё и как цель, GDK отдаст сырые PIDL вместо
+# текста с путями — файл не откроется.
+# CF_HDROP — самый простой формат Проводника на случай, когда Shell IDList
+# Array недоступен; GDK отдаёт его байтами структуры DROPFILES.
 DND_TARGETS: tuple[tuple[str, int], ...] = (
     ("text/uri-list", DND_URI_LIST),
+    ("CF_HDROP", DND_HDROP),
     ("UTF8_STRING", DND_UTF8_STRING),
     ("text/plain", DND_TEXT_PLAIN),
 )
@@ -546,6 +553,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._highlight_line = True
         self._spell_check = True
         self._com_drop: win_com_drop.ComFileDrop | None = None
+        self._com_probed = False
         self._native_drop: win_drop.NativeFileDrop | None = None
         self._recent_drops: dict[tuple[str, ...], float] = {}
 
@@ -1980,19 +1988,18 @@ class MainWindow(Gtk.ApplicationWindow):
     def _setup_drop_target(self, widget: Gtk.Widget) -> None:
         """Разрешить бросать файлы на окно, поле ввода и его прокрутку.
 
-        В Windows GTK-цели не регистрируются: иначе GDK вызвал бы
-        ``RegisterDragDrop()`` на том же HWND и перехватил бросок раньше нашего
-        COM-приёмника. Файлы приходят в ``_on_map()`` через ``win_com_drop``
-        и идут в тот же ``_open_dropped_uris()``.
+        Это штатный путь GTK: цель ``text/uri-list`` и обработчик
+        ``drag-data-received``. В Windows вызов ``drag_dest_set()`` заставляет
+        GDK зарегистрировать OLE2-приёмник на HWND окна (если до ``Gtk.init()``
+        выставлена ``GDK_WIN32_USE_EXPERIMENTAL_OLE2_DND``). Проводник отдаёт
+        ``CFSTR_SHELLIDLIST``, GDK превращает его в ``text/uri-list``, а наш
+        обработчик открывает файлы в новых вкладках.
 
-        В остальных случаях проводник предлагает перетаскивание как Move и
-        отдаёт путь файла не только как URI, но и как обычный текст. Поэтому
-        цели задаём явно и действия не ограничиваем только Copy. Завершение
-        перетаскивания делаем сами — без GTK_DEST_DEFAULT_DROP, чтобы один
-        бросок не обрабатывался дважды.
+        Проводник предлагает перетаскивание как Move и отдаёт путь файла не
+        только как URI, но и как обычный текст. Поэтому действия не ограничиваем
+        только Copy. Завершение перетаскивания делаем сами — без
+        GTK_DEST_DEFAULT_DROP, чтобы один бросок не обрабатывался дважды.
         """
-        if win_dnd.use_com_file_drop():
-            return
         # Без флагов OTHER_APP/SAME_APP: в Windows источником считается
         # корневое окно, и проверка «другое приложение» может не пройти.
         targets = [
@@ -2000,7 +2007,7 @@ class MainWindow(Gtk.ApplicationWindow):
             for name, info in DND_TARGETS
         ]
         widget.drag_dest_set(
-            Gtk.DestDefaults.MOTION | Gtk.DestDefaults.HIGHLIGHT,
+            Gtk.DestDefaults.HIGHLIGHT,
             targets,
             Gdk.DragAction.COPY | Gdk.DragAction.MOVE | Gdk.DragAction.LINK,
         )
@@ -3379,12 +3386,21 @@ class MainWindow(Gtk.ApplicationWindow):
         self._restore_window_geometry()
         self._apply_windows_titlebar()
         self._apply_titlebar_variant()
-        self._install_native_file_drop()
-        self._install_com_file_drop()
+        if not win_dnd.is_windows():
+            return
+        if win_dnd.use_gdk_file_drop():
+            # Штатный OLE2-приёмник GDK уже зарегистрирован при realize.
+            # Ставим свой только если регистрации почему-то нет.
+            self._install_com_file_drop()
+        else:
+            # GDK OLE2 выключен (например, для диагностики): остаются два
+            # независимых запасных пути — WM_DROPFILES и COM.
+            self._install_native_file_drop()
+            self._install_com_file_drop()
 
     def _install_native_file_drop(self) -> None:
         """Включить ``DragAcceptFiles`` и перехват ``WM_DROPFILES`` в Windows."""
-        if not win_dnd.use_com_file_drop() or self._native_drop is not None:
+        if self._native_drop is not None:
             return
         gdk_window = self.get_window()
         if gdk_window is None:
@@ -3403,22 +3419,21 @@ class MainWindow(Gtk.ApplicationWindow):
         return False
 
     def _install_com_file_drop(self) -> None:
-        """Зарегистрировать COM ``IDropTarget``, если нативный приём недоступен.
+        """Запасной COM ``IDropTarget``, если GDK не занял HWND.
 
-        ``DragAcceptFiles`` — основной путь: он не зависит от OLE и
-        работает в Windows 11 так же, как в прежних версиях. COM-приёмник
-        подключаем только если подкласс окна установить не удалось, чтобы не
-        создавать два конкурирующих приёмника на одном HWND.
+        В штатном режиме GDK регистрирует свой OLE2-приёмник, и
+        ``RegisterDragDrop`` вернёт ``DRAGDROP_E_ALREADYREGISTERED`` — тогда
+        ничего не меняем. Если регистрации нет, свой приёмник читает
+        ``CFSTR_SHELLIDLIST``/``CF_HDROP`` напрямую и открывает файлы тем же
+        путём ``_open_dropped_uris()``. Два приёмника на одном HWND не
+        создаются.
         """
-        if (
-            not win_dnd.use_com_file_drop()
-            or self._com_drop is not None
-            or self._native_drop is not None
-        ):
+        if self._com_drop is not None or self._com_probed:
             return
         gdk_window = self.get_window()
         if gdk_window is None:
             return
+        self._com_probed = True
         self._com_drop = win_com_drop.install_for_window(
             self._on_com_files_dropped, gdk_window
         )
@@ -4219,8 +4234,42 @@ class MainWindow(Gtk.ApplicationWindow):
             opened = True
         return opened
 
+    @staticmethod
+    def _hdrop_paths(raw: bytes) -> list[str]:
+        """Разобрать Win32 ``DROPFILES`` (``CF_HDROP``) в список путей.
+
+        Структура: смещение списка, точка броска, флаг non-client и признак
+        Unicode. Дальше идёт список строк через ``\\0``. Проводник на
+        современных версиях Windows всегда отдаёт Unicode-вариант, но
+        ANSI-вариант тоже поддерживаем.
+        """
+        if len(raw) < 20:
+            return []
+        offset, _x, _y, _non_client, wide = struct.unpack_from("<IiiII", raw, 0)
+        if not 20 <= offset < len(raw):
+            return []
+        payload = raw[offset:]
+        if wide:
+            text = payload.decode("utf-16-le", "replace")
+        else:
+            text = None
+            for encoding in ("utf-8", "cp1251", "cp1252"):
+                candidate = payload.decode(encoding, "replace")
+                if "\ufffd" not in candidate:
+                    text = candidate
+                    break
+            if text is None:
+                text = payload.decode("cp1251", "replace")
+        return [item for item in text.split("\x00") if item.strip()]
+
     def _dropped_text(self, data, info: int) -> str:
         """Достать текст из данных броска: через API или из сырых байтов."""
+        if info == DND_HDROP:
+            try:
+                raw = data.get_data()
+            except Exception:  # noqa: BLE001
+                raw = b""
+            return "\n".join(self._hdrop_paths(raw or b""))
         if info == DND_URI_LIST:
             try:
                 uris = data.get_uris() or []
@@ -4250,7 +4299,12 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_drag_data(self, widget, context, x, y, data, info, time) -> bool:
         text = self._dropped_text(data, info)
         handled = self._open_dropped_uris(text.splitlines()) if text else False
-        if not handled and info != DND_URI_LIST and isinstance(widget, Gtk.TextView):
+        # CF_HDROP — это служебная структура с путями, а не текст для вставки.
+        if (
+            not handled
+            and info not in (DND_URI_LIST, DND_HDROP)
+            and isinstance(widget, Gtk.TextView)
+        ):
             # Обычный текст, брошенный в поле ввода, вставляем как есть.
             buffer = widget.get_buffer()
             position = buffer.get_end_iter()
