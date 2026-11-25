@@ -17,7 +17,7 @@ import gi  # noqa: E402
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkSource", "4")
-from gi.repository import Gio, Gtk, Gdk, GtkSource, GLib, Pango  # noqa: E402
+from gi.repository import Gio, Gtk, Gdk, GtkSource, Pango  # noqa: E402
 
 Gtk.init_check(None)
 
@@ -2035,27 +2035,45 @@ def test_search_bar_only_on_shortcut(app: Application) -> None:
         # появляться вместе с ним.
         window.show_all()
         assert window.search_bar.get_visible() is False
+        # Дети должны быть показаны заранее: иначе после show() контейнера
+        # поле остаётся невидимым, хотя фокус туда уже ушёл.
+        assert window.search_entry.get_visible() is True
+        assert window.search_count.get_visible() is True
 
-        # gtk_accel_group_activate() — тот же путь, что и реальное нажатие
-        # Ctrl+F: accel group окна ловит клавишу до фокусного виджета.
-        plain_name = Gtk.accelerator_name(Gdk.KEY_f, 0)
-        plain_quark = GLib.quark_from_string(plain_name)
-        assert not window._find_accel_group.activate(
-            plain_quark, window, Gdk.KEY_f, 0
+        # Реальное нажатие Ctrl+F: в русской раскладке та же физическая
+        # клавиша F даёт кириллическую «а», поэтому акселераторы GTK
+        # не подходят — проверяем именно key-press-event окна.
+        keymap = Gdk.Keymap.get_default()
+        assert keymap is not None
+        found, f_entries = keymap.get_entries_for_keyval(Gdk.KEY_f)
+        assert found and f_entries
+        f_keycode = f_entries[0].keycode
+        control = Gdk.ModifierType.CONTROL_MASK
+        cases = (
+            (Gdk.KEY_f, f_keycode, 0, False),
+            (Gdk.KEY_f, f_keycode, control, True),
+            (Gdk.KEY_Cyrillic_a, f_keycode, control, True),
+            (Gdk.KEY_Cyrillic_a, 0, control, True),
+            (Gdk.KEY_Cyrillic_o, 0, control, False),
         )
-        assert window.search_bar.get_visible() is False
-
-        name = Gtk.accelerator_name(Gdk.KEY_f, Gdk.ModifierType.CONTROL_MASK)
-        quark = GLib.quark_from_string(name)
-        assert window._find_accel_group.activate(
-            quark, window, Gdk.KEY_f, Gdk.ModifierType.CONTROL_MASK
-        )
-        assert window.search_bar.get_visible() is True
+        for keyval, keycode, state, expected in cases:
+            event = Gdk.EventKey.new(Gdk.EventType.KEY_PRESS)
+            event.keyval = keyval
+            event.hardware_keycode = keycode
+            event.state = state
+            window.emit("key-press-event", event)
+            assert window.search_bar.get_visible() is expected
+            if expected:
+                window._close_search_bar()
 
         window._close_search_bar()
         assert window.search_bar.get_visible() is False
         window.action_find()
         assert window.search_bar.get_visible() is True
+        # Пока поиск открыт, границы соседних панелей убираются.
+        assert "search-open" in window.get_style_context().list_classes()
+        window._close_search_bar()
+        assert "search-open" not in window.get_style_context().list_classes()
     finally:
         window.destroy()
 

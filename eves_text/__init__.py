@@ -7,5 +7,5 @@ from .win_dnd import configure_dnd
 # Режим DnD нужно выбрать до Gtk.init(), который инициализирует GDK DnD.
 configure_dnd()
 
-__version__ = "0.6.62"
+__version__ = "0.6.63"
 APP_ID = "org.eves.Text"

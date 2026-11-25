@@ -1289,8 +1289,6 @@ class MainWindow(Gtk.ApplicationWindow):
         """Панель поиска, появляющаяся по Ctrl+F."""
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         bar.get_style_context().add_class("search-bar")
-        # Иначе window.show_all() при запуске показывает скрытую панель.
-        bar.set_no_show_all(True)
         bar.set_margin_start(6)
         bar.set_margin_end(6)
         bar.set_margin_top(2)
@@ -1339,7 +1337,10 @@ class MainWindow(Gtk.ApplicationWindow):
             0,
         )
 
+        # Сначала показываем детей, затем запрещаем show_all() показывать
+        # саму панель при запуске. Иначе поле остаётся скрытым навсегда.
         bar.show_all()
+        bar.set_no_show_all(True)
         bar.hide()
         return bar
 
@@ -1667,8 +1668,9 @@ class MainWindow(Gtk.ApplicationWindow):
             ("copy", self.action_copy, ["<Primary>c"]),
             ("paste", self.action_paste, ["<Primary>v"]),
             ("delete", self.action_delete, []),
-            # Ctrl+F ставится через AccelGroup окна, а не через акселератор
-            # приложения: на части Windows-сборок win-action не срабатывает.
+            # Ctrl+F обрабатывается в key-press-event окна: GTK-акселератор
+            # `<Primary>f` не срабатывает в русской раскладке, где та же
+            # физическая клавиша даёт кириллическую «а».
             ("find", self.action_find, []),
             ("select-all", self.action_select_all, ["<Primary>a"]),
             ("quit", self.action_quit, ["<Primary>q"]),
@@ -1718,23 +1720,51 @@ class MainWindow(Gtk.ApplicationWindow):
         if not self.spellcheck.available:
             self.lookup_action("spell-check").set_enabled(False)
 
-    def _install_find_accelerator(self) -> None:
-        """Ctrl+F через AccelGroup окна — надёжнее win-action в Windows."""
-        group = Gtk.AccelGroup()
-        # GTK сам приводит F при Caps Lock к `f`, отдельная привязка KEY_F
-        # создаёт лишний акселератор, который срабатывает без Ctrl.
-        group.connect(
-            Gdk.KEY_f,
-            Gdk.ModifierType.CONTROL_MASK,
-            Gtk.AccelFlags.VISIBLE,
-            self._on_find_accel,
-        )
-        self.add_accel_group(group)
-        self._find_accel_group = group
-
-    def _on_find_accel(self, *_args) -> bool:
+    def _on_window_key_press(self, _widget, event) -> bool:
+        """Открыть поиск по Ctrl+F в любой раскладке клавиатуры."""
+        if not self._is_find_key(event) or not self._control_held(event):
+            return False
         self.action_find()
         return True
+
+    @staticmethod
+    def _is_find_key(event) -> bool:
+        """Определить клавишу F по физическому коду, а не по символу."""
+        # «а» — тот же физический ключ F в русской раскладке.
+        if event.keyval in (
+            Gdk.KEY_f,
+            Gdk.KEY_F,
+            Gdk.KEY_Cyrillic_a,
+            Gdk.KEY_Cyrillic_A,
+        ):
+            return True
+        keymap = Gdk.Keymap.get_default()
+        if keymap is None or not event.hardware_keycode:
+            return False
+        _found, _entries, keyvals = keymap.get_entries_for_keycode(
+            event.hardware_keycode
+        )
+        return any(value in (Gdk.KEY_f, Gdk.KEY_F) for value in keyvals)
+
+    @staticmethod
+    def _control_held(event) -> bool:
+        """Проверить Ctrl и на случай, если GDK потерял его в событии."""
+        if event.state & Gdk.ModifierType.CONTROL_MASK:
+            return True
+        keymap = Gdk.Keymap.get_default()
+        if keymap is not None:
+            state = keymap.get_modifier_state()
+            if state & Gdk.ModifierType.CONTROL_MASK:
+                return True
+        if os.name == "nt":
+            try:
+                import ctypes
+
+                # VK_CONTROL: события Windows иногда приходят без бита GDK.
+                return bool(ctypes.windll.user32.GetKeyState(0x11) & 0x8000)
+            except Exception:  # noqa: BLE001 - клавиша не должна ронять окно
+                pass
+        return False
 
     def _spell_enabled(self) -> bool:
         if not self._spell_check:
@@ -2026,7 +2056,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.connect("delete-event", self._on_delete_event)
         self.connect("map", self._on_map)
         self.connect("configure-event", self._on_window_configure)
-        self._install_find_accelerator()
+        self.connect("key-press-event", self._on_window_key_press)
 
         # Перетаскивание файла в окно.
         self._setup_drop_target(self)
@@ -3762,6 +3792,7 @@ class MainWindow(Gtk.ApplicationWindow):
             if selected and "\n" not in selected:
                 self.search_entry.set_text(selected)
         self.search_bar.show()
+        self.get_style_context().add_class("search-open")
         self.search_entry.grab_focus()
         self.search_entry.select_region(0, -1)
         if self.search_entry.get_text():
@@ -3770,6 +3801,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _close_search_bar(self, *_args) -> None:
         """Скрыть поиск и вернуть фокус в текст."""
         self.search_bar.hide()
+        self.get_style_context().remove_class("search-open")
         if self._active_tab is not None:
             self._active_tab.view.grab_focus()
 
