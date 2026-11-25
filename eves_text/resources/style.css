@@ -162,6 +162,49 @@ menubar menuitem.force-hover {
   box-shadow: none;
 }
 
+/* Компактная панель поиска: появляется только по Ctrl+F. */
+.search-bar {
+  padding: 1px 6px;
+  border-top: 1px solid @borders;
+}
+
+.search-bar entry,
+.search-bar .search-field {
+  min-height: 22px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.search-bar label {
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+.search-bar button {
+  min-width: 20px;
+  min-height: 20px;
+  margin: 0 1px;
+  padding: 0 2px;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  box-shadow: none;
+  color: #5f6368;
+}
+
+.dark-theme .search-bar button {
+  color: #c7c7c7;
+}
+
+.search-bar button:hover {
+  background-color: rgba(32, 33, 36, 0.12);
+}
+
+.dark-theme .search-bar button:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
 /* Полоса вкладок в стиле Chrome: серая полоса, вкладки без рамок. */
 .tab-strip-row {
   background-color: #dee1e6;

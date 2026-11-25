@@ -2007,6 +2007,34 @@ def test_find_text(app: Application) -> None:
         window.destroy()
 
 
+def test_search_bar_only_on_shortcut(app: Application) -> None:
+    """Панель поиска скрыта при запуске и не открывается из меню."""
+    window = MainWindow(application=app)
+    try:
+        labels = []
+        for item in window.menubar.get_children():
+            menu = item.get_submenu()
+            if menu is None:
+                continue
+            for child in menu.get_children():
+                label = child.get_label()
+                if label:
+                    labels.append(label.replace("_", ""))
+        assert not any("Найти" in label for label in labels)
+        assert window.search_entry.get_width_chars() <= 24
+        assert window.search_bar.get_visible() is False
+
+        # application.py показывает окно через show_all(): панель не должна
+        # появляться вместе с ним.
+        window.show_all()
+        assert window.search_bar.get_visible() is False
+
+        window.action_find()
+        assert window.search_bar.get_visible() is True
+    finally:
+        window.destroy()
+
+
 if __name__ == "__main__":
     test_document()
     test_document_rtf()
@@ -2036,5 +2064,6 @@ if __name__ == "__main__":
     test_win_dnd_mode()
     test_window_geometry(test_app)
     test_find_text(test_app)
+    test_search_bar_only_on_shortcut(test_app)
     test_settings(test_app)
     print("OK: smoke test пройден")

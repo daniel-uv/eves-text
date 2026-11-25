@@ -1287,16 +1287,19 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _build_search_bar(self) -> Gtk.Box:
         """Панель поиска, появляющаяся по Ctrl+F."""
-        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         bar.get_style_context().add_class("search-bar")
-        bar.set_margin_start(12)
-        bar.set_margin_end(12)
-        bar.set_margin_top(4)
-        bar.set_margin_bottom(4)
+        # Иначе window.show_all() при запуске показывает скрытую панель.
+        bar.set_no_show_all(True)
+        bar.set_margin_start(6)
+        bar.set_margin_end(6)
+        bar.set_margin_top(2)
+        bar.set_margin_bottom(2)
 
         entry = Gtk.SearchEntry()
-        entry.set_placeholder_text("Найти в тексте")
-        entry.set_width_chars(36)
+        entry.get_style_context().add_class("search-field")
+        entry.set_placeholder_text("Поиск")
+        entry.set_width_chars(24)
         entry.connect("changed", self._on_search_changed)
         entry.connect("key-press-event", self._on_search_key)
         entry.connect("next-match", lambda *_: self._find_next())
@@ -1306,7 +1309,7 @@ class MainWindow(Gtk.ApplicationWindow):
         bar.pack_start(entry, False, False, 0)
 
         self.search_count = Gtk.Label(label="")
-        self.search_count.set_width_chars(12)
+        self.search_count.set_width_chars(9)
         self.search_count.set_xalign(0.0)
         bar.pack_start(self.search_count, False, False, 0)
 
@@ -1542,8 +1545,6 @@ class MainWindow(Gtk.ApplicationWindow):
         edit_menu.append(self._item("_Копировать", "win.copy"))
         edit_menu.append(self._item("_Вставить", "win.paste"))
         edit_menu.append(self._item("_Удалить", "win.delete"))
-        edit_menu.append(Gtk.SeparatorMenuItem())
-        edit_menu.append(self._item("_Найти…", "win.find"))
         edit_menu.append(Gtk.SeparatorMenuItem())
         edit_menu.append(self._item("Выделить _всё", "win.select-all"))
         install_hover(edit_item)
