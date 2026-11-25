@@ -27,6 +27,7 @@ _FUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
 
 _user32 = None
 _shell32 = None
+_kernel32 = None
 _get_window_long_ptr = None
 _set_window_long_ptr = None
 _get_last_error = None
@@ -54,7 +55,7 @@ def _subclass_proc_type():
 
 def _libraries():
     """Загрузить user32/shell32 и один раз настроить сигнатуры функций."""
-    global _user32, _shell32, _get_window_long_ptr, _set_window_long_ptr
+    global _user32, _shell32, _kernel32, _get_window_long_ptr, _set_window_long_ptr
     global _get_last_error, _set_last_error
     if _user32 is not None and _shell32 is not None:
         return _user32, _shell32
@@ -62,6 +63,7 @@ def _libraries():
         raise NativeDropError("Нативный DnD доступен только в Windows")
     user32 = ctypes.windll.user32  # type: ignore[attr-defined]
     shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
 
     has_ptr = hasattr(user32, "GetWindowLongPtrW")
     get_ptr = user32.GetWindowLongPtrW if has_ptr else user32.GetWindowLongW
@@ -94,10 +96,11 @@ def _libraries():
     ]
     def_window_proc.restype = ctypes.c_ssize_t
 
-    get_last_error = user32.GetLastError
+    # GetLastError/SetLastError живут в kernel32, а не в user32.
+    get_last_error = kernel32.GetLastError
     get_last_error.argtypes = []
     get_last_error.restype = ctypes.c_uint
-    set_last_error = user32.SetLastError
+    set_last_error = kernel32.SetLastError
     set_last_error.argtypes = [ctypes.c_uint]
     set_last_error.restype = None
 
@@ -138,6 +141,7 @@ def _libraries():
     _set_last_error = set_last_error
     _user32 = user32
     _shell32 = shell32
+    _kernel32 = kernel32
     return user32, shell32
 
 

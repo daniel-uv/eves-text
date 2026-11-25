@@ -217,14 +217,9 @@ def main() -> int:
         for library, names in (
             (
                 ctypes.windll.user32,
-                (
-                    "GetWindowLongPtrW",
-                    "SetWindowLongPtrW",
-                    "CallWindowProcW",
-                    "GetLastError",
-                    "SetLastError",
-                ),
+                ("GetWindowLongPtrW", "SetWindowLongPtrW", "CallWindowProcW"),
             ),
+            (ctypes.windll.kernel32, ("GetLastError", "SetLastError")),
             (ctypes.windll.shell32, ("DragAcceptFiles", "DragQueryFileW", "DragFinish")),
         ):
             for name in names:

@@ -1708,6 +1708,60 @@ def test_native_drop_install_and_hdrop() -> None:
             raise AssertionError("ошибка SetWindowLongPtrW не распознана")
 
 
+def test_native_drop_libraries_use_kernel32() -> None:
+    """GetLastError/SetLastError берутся из kernel32, а не из user32."""
+    from eves_text import win_drop
+
+    class FakeFunc:
+        def __init__(self) -> None:
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *_args) -> int:
+            return 0
+
+    user32 = SimpleNamespace(
+        GetWindowLongPtrW=FakeFunc(),
+        SetWindowLongPtrW=FakeFunc(),
+        CallWindowProcW=FakeFunc(),
+        DefWindowProcW=FakeFunc(),
+    )
+    shell32 = SimpleNamespace(
+        DragAcceptFiles=FakeFunc(),
+        DragQueryFileW=FakeFunc(),
+        DragFinish=FakeFunc(),
+    )
+    kernel32 = SimpleNamespace(GetLastError=FakeFunc(), SetLastError=FakeFunc())
+    windll = SimpleNamespace(user32=user32, shell32=shell32, kernel32=kernel32)
+
+    names = (
+        "_user32",
+        "_shell32",
+        "_kernel32",
+        "_get_window_long_ptr",
+        "_set_window_long_ptr",
+        "_get_last_error",
+        "_set_last_error",
+    )
+    saved = {name: getattr(win_drop, name) for name in names}
+    try:
+        with (
+            mock.patch.object(win_drop.os, "name", "nt"),
+            mock.patch.object(win_drop.ctypes, "windll", windll, create=True),
+        ):
+            for name in names:
+                setattr(win_drop, name, None)
+            win_drop._libraries()
+            assert win_drop._kernel32 is kernel32
+            assert win_drop._get_last_error is kernel32.GetLastError
+            assert win_drop._set_last_error is kernel32.SetLastError
+            assert not hasattr(user32, "GetLastError")
+            assert not hasattr(user32, "SetLastError")
+    finally:
+        for name, value in saved.items():
+            setattr(win_drop, name, value)
+
+
 def test_native_drop_opens_new_tab(app: Application) -> None:
     """Нативный бросок открывает файл рядом и не дублирует повторный вызов."""
     from eves_text import settings as user_settings
@@ -1977,6 +2031,7 @@ if __name__ == "__main__":
     test_com_drop_enum_s_false()
     test_com_drop_opens_new_tab(test_app)
     test_native_drop_install_and_hdrop()
+    test_native_drop_libraries_use_kernel32()
     test_native_drop_opens_new_tab(test_app)
     test_win_dnd_mode()
     test_window_geometry(test_app)
