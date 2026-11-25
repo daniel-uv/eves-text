@@ -1569,6 +1569,20 @@ def test_com_drop_enum_s_false() -> None:
     drop = win_com_drop.ComFileDrop(lambda _paths: None)
     assert drop._effect_for(object()) == win_com_drop.DROPEFFECT_COPY
     assert drop._effect_for(None) == win_com_drop.DROPEFFECT_NONE
+    # DragEnter обязан выбрать эффект из разрешённых источником, иначе
+    # Проводник показывает «запрет» и не вызывает Drop.
+    assert (
+        drop._effect_for(object(), win_com_drop.DROPEFFECT_MOVE)
+        == win_com_drop.DROPEFFECT_MOVE
+    )
+    assert (
+        drop._effect_for(object(), win_com_drop.DROPEFFECT_LINK)
+        == win_com_drop.DROPEFFECT_LINK
+    )
+    assert drop._effect_for(object(), 0) == win_com_drop.DROPEFFECT_NONE
+    allowed = ctypes.c_ulong(win_com_drop.DROPEFFECT_MOVE)
+    assert drop._drag_enter(None, object(), 0, None, ctypes.pointer(allowed)) == win_com_drop.S_OK
+    assert allowed.value == win_com_drop.DROPEFFECT_MOVE
 
 
 def test_com_drop_opens_new_tab(app: Application) -> None:
@@ -1592,6 +1606,131 @@ def test_com_drop_opens_new_tab(app: Application) -> None:
                 path = Path(tmp) / "из проводника.txt"
                 path.write_text("Файл из Проводника", encoding="utf-8")
                 assert window._open_com_dropped_paths([str(path)]) is False
+
+            assert len(window._tabs) == 2
+            assert window._active_tab is not opened
+            assert window.get_text() == "Файл из Проводника"
+            start, end = opened.buffer.get_bounds()
+            assert opened.buffer.get_text(start, end, True) == original
+        finally:
+            window.destroy()
+    finally:
+        user_settings.load = original_load
+        user_settings.save = original_save
+
+
+def test_native_drop_install_and_hdrop() -> None:
+    """WM_DROPFILES устанавливается и читает пути, включая ошибку SetWindowLongPtr."""
+    from eves_text import win_drop
+
+    files = [r"C:\Users\Jean\первый файл.txt", r"C:\Users\Jean\документ.rtf"]
+    received: list[list[str]] = []
+    finished: list[int] = []
+    accepted: list[tuple[int, bool]] = []
+
+    class FakeShell:
+        def DragQueryFileW(self, _hdrop, index, buffer, size):
+            if index == 0xFFFFFFFF:
+                return len(files)
+            value = files[index]
+            if buffer is None:
+                return len(value)
+            buffer.value = value
+            return len(value)
+
+        def DragFinish(self, hdrop) -> None:
+            finished.append(hdrop)
+
+        def DragAcceptFiles(self, hwnd, flag) -> None:
+            accepted.append((int(hwnd), bool(flag)))
+
+    class FakeUser32:
+        def __init__(self, error: int = 0) -> None:
+            self.error = error
+
+        def GetWindowLongPtrW(self, _hwnd, _index) -> int:
+            return 111
+
+        def SetWindowLongPtrW(self, _hwnd, _index, proc) -> int:
+            assert proc
+            return 0 if self.error else 222
+
+        def GetLastError(self) -> int:
+            return self.error
+
+        def SetLastError(self, value: int) -> None:
+            if not self.error:
+                self.error = value
+
+        def CallWindowProcW(self, *_args) -> int:
+            return 0
+
+        def DefWindowProcW(self, *_args) -> int:
+            return 0
+
+    shell = FakeShell()
+    user32 = FakeUser32()
+    win_drop._windows.clear()
+    with (
+        mock.patch.object(win_drop, "_libraries", return_value=(user32, shell)),
+        mock.patch.object(win_drop, "_get_window_long_ptr", user32.GetWindowLongPtrW, create=True),
+        mock.patch.object(win_drop, "_set_window_long_ptr", user32.SetWindowLongPtrW, create=True),
+        mock.patch.object(win_drop, "_get_last_error", user32.GetLastError, create=True),
+        mock.patch.object(win_drop, "_set_last_error", user32.SetLastError, create=True),
+        mock.patch.object(win_drop, "_shell32", shell, create=True),
+        mock.patch.object(win_drop, "_subclass_proc", None, create=True),
+    ):
+        drop = win_drop.NativeFileDrop(received.append)
+        assert drop.install(321) is True
+        assert accepted == [(321, True)]
+        assert win_drop._window_proc(321, win_drop._WM_DROPFILES, 77, 0) == 0
+        assert received == [files]
+        assert finished == [77]
+        drop.uninstall()
+        assert accepted[-1] == (321, False)
+        assert drop.installed is False
+
+    bad_user32 = FakeUser32(error=5)
+    with (
+        mock.patch.object(win_drop, "_libraries", return_value=(bad_user32, shell)),
+        mock.patch.object(win_drop, "_get_window_long_ptr", bad_user32.GetWindowLongPtrW, create=True),
+        mock.patch.object(win_drop, "_set_window_long_ptr", bad_user32.SetWindowLongPtrW, create=True),
+        mock.patch.object(win_drop, "_get_last_error", bad_user32.GetLastError, create=True),
+        mock.patch.object(win_drop, "_set_last_error", bad_user32.SetLastError, create=True),
+        mock.patch.object(win_drop, "_shell32", shell, create=True),
+        mock.patch.object(win_drop, "_subclass_proc", None, create=True),
+    ):
+        try:
+            win_drop.NativeFileDrop(received.append).install(322)
+        except win_drop.NativeDropError:
+            pass
+        else:
+            raise AssertionError("ошибка SetWindowLongPtrW не распознана")
+
+
+def test_native_drop_opens_new_tab(app: Application) -> None:
+    """Нативный бросок открывает файл рядом и не дублирует повторный вызов."""
+    from eves_text import settings as user_settings
+
+    original_load = user_settings.load
+    original_save = user_settings.save
+    user_settings.load = lambda: {}
+    user_settings.save = lambda data: None
+
+    try:
+        window = MainWindow(application=app)
+        try:
+            opened = window._active_tab
+            assert opened is not None
+            window.set_text("Текущий текст документа", None)
+            original = window.get_text()
+
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "из проводника.txt"
+                path.write_text("Файл из Проводника", encoding="utf-8")
+                assert window._open_native_dropped_paths([str(path)]) is False
+                # Дубликат от второго приёмника не должен открыть вкладку ещё раз.
+                assert window._open_native_dropped_paths([str(path)]) is False
 
             assert len(window._tabs) == 2
             assert window._active_tab is not opened
@@ -1741,6 +1880,79 @@ def test_settings(app: Application) -> None:
         user_settings.save = original_save
 
 
+def test_window_geometry(app: Application) -> None:
+    """Размер и положение окна сохраняются и восстанавливаются."""
+    from eves_text import settings as user_settings
+
+    original_load = user_settings.load
+    original_save = user_settings.save
+    saved: list[dict] = []
+    user_settings.load = lambda: {
+        "font_size": 16,
+        "window": {"x": 120, "y": 90, "width": 900, "height": 640},
+    }
+    user_settings.save = lambda data: saved.append(dict(data))
+
+    try:
+        window = MainWindow(application=app)
+        try:
+            assert window._window_geometry == (120, 90, 900, 640)
+            event = SimpleNamespace(width=1120, height=780)
+            with mock.patch.object(window, "get_position", return_value=(30, 40)):
+                assert window._on_window_configure(window, event) is False
+            assert window._window_geometry == (30, 40, 1120, 780)
+            clamped = MainWindow._validated_window_geometry(
+                {"x": -50, "y": 99999, "width": 100, "height": 10000}
+            )
+            assert clamped is None  # y вне разумного диапазона
+            offscreen_left = MainWindow._validated_window_geometry(
+                {"x": -800, "y": 10, "width": 900, "height": 640}
+            )
+            assert offscreen_left is not None
+            assert offscreen_left[0] == -800 and offscreen_left[2] >= 400
+        finally:
+            window.destroy()
+    finally:
+        user_settings.load = original_load
+        user_settings.save = original_save
+
+    assert saved
+    assert saved[-1]["window"] == {"x": 30, "y": 40, "width": 1120, "height": 780}
+    assert saved[-1]["font_size"] == 16
+
+
+def test_find_text(app: Application) -> None:
+    """Ctrl+F открывает поиск, Enter листает совпадения, Esc закрывает."""
+    window = MainWindow(application=app)
+    try:
+        assert "<Primary>f" in app.get_accels_for_action("win.find")
+        window.set_text("Первый файл\nВторой файл и снова файл", None)
+
+        window.action_find()
+        assert window.search_bar.get_visible() is True
+        window.search_entry.set_text("файл")
+        bounds = window.buffer.get_selection_bounds()
+        assert bounds is not None
+        assert window.buffer.get_text(bounds[0], bounds[1], True) == "файл"
+        first = window.buffer.get_iter_at_mark(window.buffer.get_insert()).get_offset()
+
+        window._find_next()
+        second = window.buffer.get_iter_at_mark(window.buffer.get_insert()).get_offset()
+        assert second > first
+
+        window._find_previous()
+        previous = window.buffer.get_iter_at_mark(window.buffer.get_insert()).get_offset()
+        assert previous == first
+
+        window.search_entry.set_text("нет такого слова")
+        assert window.search_count.get_text() == "Нет совпадений"
+
+        window._close_search_bar()
+        assert window.search_bar.get_visible() is False
+    finally:
+        window.destroy()
+
+
 if __name__ == "__main__":
     test_document()
     test_document_rtf()
@@ -1759,9 +1971,15 @@ if __name__ == "__main__":
     test_formatting(test_app)
     test_drag_and_drop(test_app)
     test_com_drop_parsing()
+    test_com_drop_medium_bytes_uses_kernel32()
+    test_com_drop_dropped_paths_reads_medium()
     test_com_drop_registration()
     test_com_drop_enum_s_false()
     test_com_drop_opens_new_tab(test_app)
+    test_native_drop_install_and_hdrop()
+    test_native_drop_opens_new_tab(test_app)
     test_win_dnd_mode()
+    test_window_geometry(test_app)
+    test_find_text(test_app)
     test_settings(test_app)
     print("OK: smoke test пройден")

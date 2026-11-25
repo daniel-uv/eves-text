@@ -34,6 +34,7 @@ from . import (  # noqa: E402
     updates,
     win_com_drop,
     win_dnd,
+    win_drop,
     win_theme,
 )
 from . import settings as user_settings  # noqa: E402
@@ -207,6 +208,7 @@ class DocumentTab:
         self.align_guard = False
         self.popup_iter: Gtk.TextIter | None = None
         self.caret: CaretBlinker | None = None
+        self.search_context: GtkSource.SearchContext | None = None
         self._pointer_in_tab = False
         self._pointer_in_close = False
 
@@ -544,6 +546,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._highlight_line = True
         self._spell_check = True
         self._com_drop: win_com_drop.ComFileDrop | None = None
+        self._native_drop: win_drop.NativeFileDrop | None = None
+        self._recent_drops: dict[tuple[str, ...], float] = {}
 
         config = user_settings.load()
         saved_size = config.get("font_size")
@@ -598,7 +602,13 @@ class MainWindow(Gtk.ApplicationWindow):
             else self._detect_system_dark_theme()
         )
 
-        self.set_default_size(1000, 700)
+        self._window_geometry = self._validated_window_geometry(config.get("window"))
+        self._geometry_restored = False
+        if self._window_geometry is not None:
+            _x, _y, width, height = self._window_geometry
+            self.set_default_size(width, height)
+        else:
+            self.set_default_size(1000, 700)
         self._icon_name = app_icon_name()
         self.set_icon_name(self._icon_name)
 
@@ -615,6 +625,64 @@ class MainWindow(Gtk.ApplicationWindow):
         self._apply_style_scheme()
         self._update_title()
         self._update_status()
+
+    @staticmethod
+    def _validated_window_geometry(value: object) -> tuple[int, int, int, int] | None:
+        """Проверить сохранённые размеры и координаты окна."""
+        if not isinstance(value, dict):
+            return None
+        try:
+            x, y = int(value["x"]), int(value["y"])
+            width, height = int(value["width"]), int(value["height"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        screen = Gdk.Screen.get_default()
+        max_width = screen.get_width() if screen is not None else 3840
+        max_height = screen.get_height() if screen is not None else 2160
+        # Не ограничиваем x/y начальным экраном: на Windows и Linux второй
+        # монитор слева или выше основного имеет отрицательные координаты.
+        if not (-10000 <= x <= 10000 and -10000 <= y <= 10000):
+            return None
+        width = max(400, min(width, max_width))
+        height = max(300, min(height, max_height))
+        return x, y, width, height
+
+    def _restore_window_geometry(self) -> None:
+        """Вернуть размер и положение после первого показа окна."""
+        if self._geometry_restored or self._window_geometry is None:
+            return
+        self._geometry_restored = True
+        x, y, width, height = self._window_geometry
+        self.resize(width, height)
+        self.move(x, y)
+
+    def _on_window_configure(self, _widget, event) -> bool:
+        """Запомнить актуальные размеры и положение окна."""
+        try:
+            width, height = int(event.width), int(event.height)
+            x, y = self.get_position()
+            if width > 0 and height > 0:
+                self._window_geometry = (x, y, width, height)
+        except Exception:  # noqa: BLE001 - конфигурация не должна ломать окно
+            pass
+        return False
+
+    def _save_window_geometry(self) -> None:
+        """Записать геометрию в настройки, сохранив остальные ключи."""
+        if self._window_geometry is None:
+            try:
+                width, height = self.get_size()
+                x, y = self.get_position()
+                self._window_geometry = (x, y, width, height)
+            except Exception:  # noqa: BLE001
+                return
+        x, y, width, height = self._window_geometry
+        config = user_settings.load()
+        saved = config.get("window")
+        window_state = dict(saved) if isinstance(saved, dict) else {}
+        window_state.update({"x": x, "y": y, "width": width, "height": height})
+        config["window"] = window_state
+        user_settings.save(config)
 
     # ------------------------------------------------------------- вкладки
 
@@ -1210,9 +1278,67 @@ class MainWindow(Gtk.ApplicationWindow):
         self.stack.add_named(self.empty_state, "empty")
         box.pack_start(self.stack, True, True, 0)
 
+        self.search_bar = self._build_search_bar()
+        box.pack_start(self.search_bar, False, False, 0)
+
         self.bottom_bar = self._build_bottom_bar()
         box.pack_start(self.bottom_bar, False, False, 0)
         box.pack_start(self._build_statusbar(), False, False, 0)
+
+    def _build_search_bar(self) -> Gtk.Box:
+        """Панель поиска, появляющаяся по Ctrl+F."""
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        bar.get_style_context().add_class("search-bar")
+        bar.set_margin_start(12)
+        bar.set_margin_end(12)
+        bar.set_margin_top(4)
+        bar.set_margin_bottom(4)
+
+        entry = Gtk.SearchEntry()
+        entry.set_placeholder_text("Найти в тексте")
+        entry.set_width_chars(36)
+        entry.connect("changed", self._on_search_changed)
+        entry.connect("key-press-event", self._on_search_key)
+        entry.connect("next-match", lambda *_: self._find_next())
+        entry.connect("previous-match", lambda *_: self._find_previous())
+        entry.connect("stop-search", lambda *_: self._close_search_bar())
+        self.search_entry = entry
+        bar.pack_start(entry, False, False, 0)
+
+        self.search_count = Gtk.Label(label="")
+        self.search_count.set_width_chars(12)
+        self.search_count.set_xalign(0.0)
+        bar.pack_start(self.search_count, False, False, 0)
+
+        def button(icon: str, tooltip: str, handler) -> Gtk.Button:
+            item = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.MENU)
+            item.set_relief(Gtk.ReliefStyle.NONE)
+            item.set_tooltip_text(tooltip)
+            item.connect("clicked", handler)
+            return item
+
+        bar.pack_start(
+            button("go-up-symbolic", "Предыдущее совпадение (Shift+Enter)", self._on_search_previous),
+            False,
+            False,
+            0,
+        )
+        bar.pack_start(
+            button("go-down-symbolic", "Следующее совпадение (Enter)", self._on_search_next),
+            False,
+            False,
+            0,
+        )
+        bar.pack_start(
+            button("window-close-symbolic", "Закрыть поиск (Esc)", self._on_search_close),
+            False,
+            False,
+            0,
+        )
+
+        bar.show_all()
+        bar.hide()
+        return bar
 
     def _build_empty_state(self) -> Gtk.Box:
         """Экран, который показывается, когда закрыты все вкладки."""
@@ -1417,6 +1543,8 @@ class MainWindow(Gtk.ApplicationWindow):
         edit_menu.append(self._item("_Вставить", "win.paste"))
         edit_menu.append(self._item("_Удалить", "win.delete"))
         edit_menu.append(Gtk.SeparatorMenuItem())
+        edit_menu.append(self._item("_Найти…", "win.find"))
+        edit_menu.append(Gtk.SeparatorMenuItem())
         edit_menu.append(self._item("Выделить _всё", "win.select-all"))
         install_hover(edit_item)
         menubar.append(edit_item)
@@ -1538,6 +1666,7 @@ class MainWindow(Gtk.ApplicationWindow):
             ("copy", self.action_copy, ["<Primary>c"]),
             ("paste", self.action_paste, ["<Primary>v"]),
             ("delete", self.action_delete, []),
+            ("find", self.action_find, ["<Primary>f"]),
             ("select-all", self.action_select_all, ["<Primary>a"]),
             ("quit", self.action_quit, ["<Primary>q"]),
             ("ai-download", self.action_ai_download, []),
@@ -1875,6 +2004,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _connect_signals(self) -> None:
         self.connect("delete-event", self._on_delete_event)
         self.connect("map", self._on_map)
+        self.connect("configure-event", self._on_window_configure)
 
         # Перетаскивание файла в окно.
         self._setup_drop_target(self)
@@ -3194,13 +3324,45 @@ class MainWindow(Gtk.ApplicationWindow):
         self._apply_windows_titlebar()
 
     def _on_map(self, *_args) -> None:
+        self._restore_window_geometry()
         self._apply_windows_titlebar()
         self._apply_titlebar_variant()
+        self._install_native_file_drop()
         self._install_com_file_drop()
 
+    def _install_native_file_drop(self) -> None:
+        """Включить ``DragAcceptFiles`` и перехват ``WM_DROPFILES`` в Windows."""
+        if not win_dnd.use_com_file_drop() or self._native_drop is not None:
+            return
+        gdk_window = self.get_window()
+        if gdk_window is None:
+            return
+        self._native_drop = win_drop.install_for_window(
+            self._on_native_files_dropped, gdk_window
+        )
+
+    def _on_native_files_dropped(self, paths: list[str]) -> None:
+        """Открыть файлы из ``WM_DROPFILES`` в новых вкладках."""
+        GLib.idle_add(self._open_native_dropped_paths, list(paths))
+
+    def _open_native_dropped_paths(self, paths: list[str]) -> bool:
+        """Открыть файлы из нативного броска, не меняя текущий документ."""
+        self._open_dropped_paths_once(paths)
+        return False
+
     def _install_com_file_drop(self) -> None:
-        """Зарегистрировать COM ``IDropTarget`` на HWND окна в Windows."""
-        if not win_dnd.use_com_file_drop() or self._com_drop is not None:
+        """Зарегистрировать COM ``IDropTarget``, если нативный приём недоступен.
+
+        ``DragAcceptFiles`` — основной путь: он не зависит от OLE и
+        работает в Windows 11 так же, как в прежних версиях. COM-приёмник
+        подключаем только если подкласс окна установить не удалось, чтобы не
+        создавать два конкурирующих приёмника на одном HWND.
+        """
+        if (
+            not win_dnd.use_com_file_drop()
+            or self._com_drop is not None
+            or self._native_drop is not None
+        ):
             return
         gdk_window = self.get_window()
         if gdk_window is None:
@@ -3215,8 +3377,28 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _open_com_dropped_paths(self, paths: list[str]) -> bool:
         """Открыть файлы из COM-броска, не меняя текущий документ."""
-        self._open_dropped_uris(paths)
+        self._open_dropped_paths_once(paths)
         return False
+
+    def _open_dropped_paths_once(self, paths: list[str]) -> bool:
+        """Открыть пути один раз, если бросок дошёл сразу двумя путями.
+
+        Windows может доставить один и тот же бросок и как OLE ``Drop``, и как
+        ``WM_DROPFILES``. Игнорируем повтор только для того же набора путей
+        в течение короткого времени.
+        """
+        key = tuple(paths)
+        if not key:
+            return False
+        now = time.monotonic()
+        previous = self._recent_drops.get(key)
+        if previous is not None and now - previous < 1.0:
+            return False
+        self._recent_drops[key] = now
+        if len(self._recent_drops) > 64:
+            for old_key in list(self._recent_drops)[:32]:
+                self._recent_drops.pop(old_key, None)
+        return self._open_dropped_uris(list(paths))
 
     def _apply_titlebar_variant(self, window: Gtk.Window | None = None) -> None:
         """Сообщает WM вариант рамки окна: светлый или тёмный.
@@ -3545,6 +3727,105 @@ class MainWindow(Gtk.ApplicationWindow):
         start, end = self.buffer.get_bounds()
         self.buffer.select_range(end, start)
 
+    # ---------------------------------------------------------------- поиск
+
+    def action_find(self, *_args) -> None:
+        """Открыть панель поиска (Ctrl+F)."""
+        tab = self._active_tab
+        if tab is None:
+            return
+        bounds = tab.buffer.get_selection_bounds()
+        if bounds:
+            selected = tab.buffer.get_text(bounds[0], bounds[1], True)
+            if selected and "\n" not in selected:
+                self.search_entry.set_text(selected)
+        self.search_bar.show()
+        self.search_entry.grab_focus()
+        self.search_entry.select_region(0, -1)
+        if self.search_entry.get_text():
+            self._find_next()
+
+    def _close_search_bar(self, *_args) -> None:
+        """Скрыть поиск и вернуть фокус в текст."""
+        self.search_bar.hide()
+        if self._active_tab is not None:
+            self._active_tab.view.grab_focus()
+
+    def _on_search_close(self, *_args) -> None:
+        self._close_search_bar()
+
+    def _on_search_next(self, *_args) -> None:
+        self._find_next()
+
+    def _on_search_previous(self, *_args) -> None:
+        self._find_previous()
+
+    def _on_search_changed(self, _entry) -> None:
+        self._find_next()
+
+    def _on_search_key(self, _entry, event) -> bool:
+        """Enter — вперёд, Shift+Enter — назад, Esc — закрыть поиск."""
+        if event.keyval == Gdk.KEY_Escape:
+            self._close_search_bar()
+            return True
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            if event.get_state() & Gdk.ModifierType.SHIFT_MASK:
+                self._find_previous()
+            else:
+                self._find_next()
+            return True
+        return False
+
+    def _search_context(self) -> GtkSource.SearchContext | None:
+        """Контекст поиска для активной вкладки с текущими настройками."""
+        tab = self._active_tab
+        if tab is None:
+            return None
+        if tab.search_context is None:
+            tab.search_context = GtkSource.SearchContext.new(tab.buffer)
+        settings = tab.search_context.get_settings()
+        settings.set_search_text(self.search_entry.get_text())
+        settings.set_case_sensitive(False)
+        settings.set_wrap_around(True)
+        return tab.search_context
+
+    def _find(self, forward: bool) -> None:
+        """Выделить следующее или предыдущее совпадение."""
+        tab = self._active_tab
+        context = self._search_context()
+        if tab is None or context is None:
+            return
+        if not self.search_entry.get_text():
+            self.search_count.set_text("")
+            return
+
+        insert = tab.buffer.get_iter_at_mark(tab.buffer.get_insert())
+        bound = tab.buffer.get_iter_at_mark(tab.buffer.get_selection_bound())
+        if forward:
+            start_iter = insert if insert.compare(bound) >= 0 else bound
+            found, start, end, _wrapped = context.forward(start_iter)
+        else:
+            start_iter = insert if insert.compare(bound) <= 0 else bound
+            found, start, end, _wrapped = context.backward(start_iter)
+        if not found:
+            self.search_count.set_text("Нет совпадений")
+            return
+
+        tab.buffer.select_range(start, end)
+        tab.view.scroll_to_iter(start, 0.05, True, 0.5, 0.5)
+        count = context.get_occurrences_count()
+        position = context.get_occurrence_position(start, end)
+        if count > 0 and position > 0:
+            self.search_count.set_text(f"{position} / {count}")
+        else:
+            self.search_count.set_text("Найдено" if count > 0 else "Нет совпадений")
+
+    def _find_next(self) -> None:
+        self._find(forward=True)
+
+    def _find_previous(self) -> None:
+        self._find(forward=False)
+
     # ------------------------------------------------------------- оформление
 
     @staticmethod
@@ -3816,6 +4097,10 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_destroy(self, *_args) -> None:
         """Останавливает скачивание и отдельную службу при закрытии окна."""
         self._destroyed = True
+        self._save_window_geometry()
+        if self._native_drop is not None:
+            self._native_drop.uninstall()
+            self._native_drop = None
         if self._com_drop is not None:
             self._com_drop.uninstall()
             self._com_drop = None

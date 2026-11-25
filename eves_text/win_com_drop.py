@@ -39,11 +39,16 @@ DVASPECT_CONTENT = 1
 DATADIR_GET = 1
 DROPEFFECT_NONE = 0
 DROPEFFECT_COPY = 1
+DROPEFFECT_MOVE = 2
+DROPEFFECT_LINK = 4
+DROPEFFECT_ALL = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK
 
 MAX_FILES = 512
 MAX_PATH_BUFFER = 32768
-FILEDESCRIPTORW_SIZE = 576
-FILEDESCRIPTORW_NAME_OFFSET = 56
+# FILEDESCRIPTORW: 4 + CLSID(16) + SIZEL(8) + POINTL(8) + DWORD(4)
+# + 3×FILETIME(24) + 2×DWORD(8) = 72 байта до cFileName, всего 592.
+FILEDESCRIPTORW_SIZE = 592
+FILEDESCRIPTORW_NAME_OFFSET = 72
 FILEDESCRIPTORW_NAME_SIZE = 520
 
 _FUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
@@ -534,21 +539,32 @@ class ComFileDrop:
         self._ref_count = max(0, self._ref_count - 1)
         return self._ref_count
 
-    def _effect_for(self, data_object) -> int:
-        """Разрешить бросок: Windows спросит эффект до вызова Drop.
+    def _effect_for(self, data_object, allowed: int | None = None) -> int:
+        """Выбрать эффект, который разрешил источник броска.
 
-        Проверять форматы здесь ненадёжно: источник может не ответить на
-        QueryGetData до начала броска. Если IDataObject есть — принимаем
-        копирование, а реальные пути разбираем уже в ``Drop``.
+        Документация ``IDropTarget::DragEnter`` требует вернуть один из
+        эффектов, переданных на входе в ``pdwEffect``. Если всегда отвечать
+        ``DROPEFFECT_COPY``, а Проводник разрешил только Move, OLE покажет
+        значок «запрета» и не вызовет ``Drop``. Пути мы всё равно только
+        читаем, поэтому любой разрешённый эффект подходит.
         """
-        return DROPEFFECT_COPY if data_object else DROPEFFECT_NONE
+        if not data_object:
+            return DROPEFFECT_NONE
+        if allowed is None:
+            allowed = DROPEFFECT_ALL
+        for candidate in (DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_LINK):
+            if allowed & candidate:
+                return candidate
+        return DROPEFFECT_NONE
 
     def _drag_enter(self, _this, data_object, _keys, _point, effect) -> int:
-        effect[0] = self._effect_for(data_object)
+        allowed = int(effect[0]) if effect is not None else DROPEFFECT_ALL
+        effect[0] = self._effect_for(data_object, allowed)
         return S_OK
 
     def _drag_over(self, _this, data_object, _keys, _point, effect) -> int:
-        effect[0] = self._effect_for(data_object)
+        allowed = int(effect[0]) if effect is not None else DROPEFFECT_ALL
+        effect[0] = self._effect_for(data_object, allowed)
         return S_OK
 
     def _drag_leave(self, _this) -> int:
@@ -559,7 +575,9 @@ class ComFileDrop:
             paths = dropped_paths(data_object)
         except Exception:  # noqa: BLE001 - бросок не должен ломать Проводник
             paths = []
-        effect[0] = DROPEFFECT_COPY if paths else DROPEFFECT_NONE
+        if effect is not None:
+            allowed = int(effect[0]) if effect[0] else DROPEFFECT_ALL
+            effect[0] = self._effect_for(data_object, allowed) if paths else DROPEFFECT_NONE
         if paths:
             self._callback(paths)
         return S_OK

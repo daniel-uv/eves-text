@@ -207,6 +207,50 @@ def main() -> int:
 
     results.append(check("DnD файлов", file_dnd))
 
+    def native_file_dnd():
+        """Проверить DragAcceptFiles и перехват WM_DROPFILES на HWND окна."""
+        from eves_text import win_drop, win_theme
+
+        import ctypes
+        from gi.repository import Gtk
+
+        for library, names in (
+            (
+                ctypes.windll.user32,
+                (
+                    "GetWindowLongPtrW",
+                    "SetWindowLongPtrW",
+                    "CallWindowProcW",
+                    "GetLastError",
+                    "SetLastError",
+                ),
+            ),
+            (ctypes.windll.shell32, ("DragAcceptFiles", "DragQueryFileW", "DragFinish")),
+        ):
+            for name in names:
+                if not hasattr(library, name):
+                    raise RuntimeError(f"нет {name}")
+
+        window = Gtk.Window()
+        try:
+            window.realize()
+            gdk_window = window.get_window()
+            if gdk_window is None:
+                raise RuntimeError("окно не получило GdkWindow")
+            hwnd = win_theme.gdk_window_handle(gdk_window)
+            if not hwnd:
+                raise RuntimeError("не удалось получить HWND окна")
+            drop = win_drop.install_for_window(lambda _paths: None, gdk_window)
+            if drop is None or not drop.installed:
+                raise RuntimeError("WM_DROPFILES не установлен")
+            drop.uninstall()
+        finally:
+            window.destroy()
+
+        return f"WM_DROPFILES на HWND {hwnd:#x}"
+
+    results.append(check("Нативный DnD", native_file_dnd))
+
     def loaders():
         import gi
 
