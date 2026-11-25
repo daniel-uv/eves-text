@@ -1667,7 +1667,9 @@ class MainWindow(Gtk.ApplicationWindow):
             ("copy", self.action_copy, ["<Primary>c"]),
             ("paste", self.action_paste, ["<Primary>v"]),
             ("delete", self.action_delete, []),
-            ("find", self.action_find, ["<Primary>f"]),
+            # Ctrl+F ставится через AccelGroup окна, а не через акселератор
+            # приложения: на части Windows-сборок win-action не срабатывает.
+            ("find", self.action_find, []),
             ("select-all", self.action_select_all, ["<Primary>a"]),
             ("quit", self.action_quit, ["<Primary>q"]),
             ("ai-download", self.action_ai_download, []),
@@ -1715,6 +1717,24 @@ class MainWindow(Gtk.ApplicationWindow):
 
         if not self.spellcheck.available:
             self.lookup_action("spell-check").set_enabled(False)
+
+    def _install_find_accelerator(self) -> None:
+        """Ctrl+F через AccelGroup окна — надёжнее win-action в Windows."""
+        group = Gtk.AccelGroup()
+        # GTK сам приводит F при Caps Lock к `f`, отдельная привязка KEY_F
+        # создаёт лишний акселератор, который срабатывает без Ctrl.
+        group.connect(
+            Gdk.KEY_f,
+            Gdk.ModifierType.CONTROL_MASK,
+            Gtk.AccelFlags.VISIBLE,
+            self._on_find_accel,
+        )
+        self.add_accel_group(group)
+        self._find_accel_group = group
+
+    def _on_find_accel(self, *_args) -> bool:
+        self.action_find()
+        return True
 
     def _spell_enabled(self) -> bool:
         if not self._spell_check:
@@ -2006,6 +2026,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.connect("delete-event", self._on_delete_event)
         self.connect("map", self._on_map)
         self.connect("configure-event", self._on_window_configure)
+        self._install_find_accelerator()
 
         # Перетаскивание файла в окно.
         self._setup_drop_target(self)

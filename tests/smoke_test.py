@@ -17,7 +17,7 @@ import gi  # noqa: E402
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkSource", "4")
-from gi.repository import Gio, Gtk, Gdk, GtkSource, Pango  # noqa: E402
+from gi.repository import Gio, Gtk, Gdk, GtkSource, GLib, Pango  # noqa: E402
 
 Gtk.init_check(None)
 
@@ -1979,7 +1979,8 @@ def test_find_text(app: Application) -> None:
     """Ctrl+F открывает поиск, Enter листает совпадения, Esc закрывает."""
     window = MainWindow(application=app)
     try:
-        assert "<Primary>f" in app.get_accels_for_action("win.find")
+        assert window.lookup_action("find") is not None
+        assert "<Primary>f" not in app.get_accels_for_action("win.find")
         window.set_text("Первый файл\nВторой файл и снова файл", None)
 
         window.action_find()
@@ -2009,6 +2010,12 @@ def test_find_text(app: Application) -> None:
 
 def test_search_bar_only_on_shortcut(app: Application) -> None:
     """Панель поиска скрыта при запуске и не открывается из меню."""
+    css = (ROOT / "eves_text" / "resources" / "style.css").read_text(encoding="utf-8")
+    search_block = css.split(".search-bar {", 1)[1].split("}", 1)[0]
+    dark_block = css.split(".dark-theme .search-bar {", 1)[1].split("}", 1)[0]
+    assert "background-color: #ffffff" in search_block
+    assert "background-color: #2b2b2b" in dark_block
+
     window = MainWindow(application=app)
     try:
         labels = []
@@ -2029,6 +2036,24 @@ def test_search_bar_only_on_shortcut(app: Application) -> None:
         window.show_all()
         assert window.search_bar.get_visible() is False
 
+        # gtk_accel_group_activate() — тот же путь, что и реальное нажатие
+        # Ctrl+F: accel group окна ловит клавишу до фокусного виджета.
+        plain_name = Gtk.accelerator_name(Gdk.KEY_f, 0)
+        plain_quark = GLib.quark_from_string(plain_name)
+        assert not window._find_accel_group.activate(
+            plain_quark, window, Gdk.KEY_f, 0
+        )
+        assert window.search_bar.get_visible() is False
+
+        name = Gtk.accelerator_name(Gdk.KEY_f, Gdk.ModifierType.CONTROL_MASK)
+        quark = GLib.quark_from_string(name)
+        assert window._find_accel_group.activate(
+            quark, window, Gdk.KEY_f, Gdk.ModifierType.CONTROL_MASK
+        )
+        assert window.search_bar.get_visible() is True
+
+        window._close_search_bar()
+        assert window.search_bar.get_visible() is False
         window.action_find()
         assert window.search_bar.get_visible() is True
     finally:

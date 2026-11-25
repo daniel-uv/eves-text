@@ -165,7 +165,13 @@ menubar menuitem.force-hover {
 /* Компактная панель поиска: появляется только по Ctrl+F. */
 .search-bar {
   padding: 1px 6px;
-  border-top: 1px solid @borders;
+  background-color: #ffffff;
+  background-image: none;
+}
+
+.dark-theme .search-bar {
+  background-color: #2b2b2b;
+  background-image: none;
 }
 
 .search-bar entry,
