@@ -3,8 +3,15 @@
 Текстовый редактор для русского языка: проверка орфографии и проверка текста
 локальной моделью через Ollama.
 
-**Платформы:** Linux (`.deb`) и Windows 11. Готовые сборки — в
-[Releases](https://github.com/daniel-uv/eves-text/releases).
+**Платформы:** Linux (`.deb`) и Windows 11. Для каждой системы — отдельный
+релиз со своими файлами:
+
+| Система | Актуальная версия |
+|---|---|
+| Linux | [**Eve's Text 0.6.65 — `.deb`**](https://github.com/daniel-uv/eves-text/releases/tag/v0.6.65) |
+| Windows 11 | [**Eve's Text 0.6.65 — `.exe` и portable `.zip`**](https://github.com/daniel-uv/eves-text/releases/tag/win-v0.6.65) |
+
+Все версии — в [Releases](https://github.com/daniel-uv/eves-text/releases).
 
 ## Возможности
 
@@ -39,7 +46,7 @@
 
 ### Linux
 
-Скачайте `.deb` из [Releases](https://github.com/daniel-uv/eves-text/releases)
+Скачайте `.deb` из [Linux-релиза](https://github.com/daniel-uv/eves-text/releases/tag/v0.6.65)
 и установите:
 
 ```bash
