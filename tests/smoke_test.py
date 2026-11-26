@@ -1325,6 +1325,45 @@ def test_drag_and_drop(app: Application) -> None:
                     assert window._on_drag_drop(opened.view, source, 0, 0, 0) is True
                 assert get_data.call_args.args[1] == uri_atom
 
+                # Источник без text/uri-list, но с CF_HDROP.
+                hdrop_atom = Gdk.atom_intern("CF_HDROP", False)
+                source = mock.Mock()
+                source.list_targets.return_value = [hdrop_atom]
+                with mock.patch.object(opened.view, "drag_get_data") as get_data:
+                    assert window._on_drag_drop(opened.view, source, 0, 0, 0) is True
+                assert get_data.call_args.args[1] == hdrop_atom
+
+                # Нет контекста и нет целей: не падаем, просим URI.
+                with mock.patch.object(opened.view, "drag_get_data") as get_data:
+                    assert window._on_drag_drop(opened.view, None, 0, 0, 0) is True
+                assert get_data.call_args.args[1] == uri_atom
+
+                # Пустой text/uri-list (виртуальный PIDL): дозапрашиваем
+                # CF_HDROP в том же броске и не завершаем его раньше времени.
+                source = mock.Mock()
+                source.list_targets.return_value = [uri_atom, hdrop_atom]
+                fourth = Path(tmp) / "четвёртый.txt"
+                fourth.write_text("Из CF_HDROP", encoding="utf-8")
+                files = str(fourth).encode("utf-16-le") + b"\x00\x00"
+                hdrop = struct.pack("<IiiII", 20, 0, 0, 0, 1) + files
+                with mock.patch.object(Gtk, "drag_finish") as finish, mock.patch.object(
+                    opened.view, "drag_get_data"
+                ) as get_data:
+                    assert window._on_drag_data(
+                        opened.view, source, 0, 0,
+                        FakeSelectionData(b""), DND_URI_LIST, 0,
+                    ) is True
+                finish.assert_not_called()
+                assert get_data.call_args.args[1] == hdrop_atom
+                # Повторная доставка уже с данными CF_HDROP.
+                with mock.patch.object(Gtk, "drag_finish") as finish:
+                    assert window._on_drag_data(
+                        opened.view, source, 0, 0,
+                        FakeSelectionData(hdrop), DND_HDROP, 0,
+                    ) is True
+                assert finish.call_count == 1
+                assert window.get_text() == "Из CF_HDROP"
+
             # Пути Windows без хоста: file:///C:/... и /C:/...
             parsed = MainWindow._dropped_paths(
                 "file:///C:/Users/Jean/a.txt\n/C:/Users/Jean/b.txt"
@@ -1826,6 +1865,36 @@ def test_native_drop_opens_new_tab(app: Application) -> None:
         user_settings.save = original_save
 
 
+def test_dnd_debug_log() -> None:
+    """Диагностика DnD молчит без флажка и пишет лог с ним."""
+    from eves_text import dnd_debug
+
+    old_local = os.environ.get("LOCALAPPDATA")
+    old_debug = os.environ.pop("EVES_TEXT_DND_DEBUG", None)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["LOCALAPPDATA"] = tmp
+            assert dnd_debug.enabled() is False
+            dnd_debug.log("не должно быть")
+            assert not (Path(tmp) / "Eve's Text" / "dnd.log").exists()
+
+            (Path(tmp) / "Eve's Text").mkdir()
+            (Path(tmp) / "Eve's Text" / "dnd-debug.flag").write_text("")
+            assert dnd_debug.enabled() is True
+            dnd_debug.log("проверка")
+            log = (Path(tmp) / "Eve's Text" / "dnd.log").read_text(
+                encoding="utf-8"
+            )
+            assert "проверка" in log
+    finally:
+        if old_local is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = old_local
+        if old_debug is not None:
+            os.environ["EVES_TEXT_DND_DEBUG"] = old_debug
+
+
 def test_win_dnd_mode() -> None:
     """В Windows штатный OLE2 GDK включается до Gtk.init()."""
     from eves_text import win_dnd
@@ -1844,8 +1913,20 @@ def test_win_dnd_mode() -> None:
             win_dnd.configure_dnd()
             assert win_dnd.use_gdk_file_drop() is False
             assert win_dnd.OLE2_ENV not in os.environ
+
+        # Диагностический отказ от OLE2: переменную нужно именно убрать.
+        os.environ.pop(win_dnd.OLE2_ENV, None)
+        os.environ[win_dnd.NO_OLE2_ENV] = "1"
+        try:
+            with mock.patch.object(os, "name", "nt"):
+                win_dnd.configure_dnd()
+                assert win_dnd.use_gdk_file_drop() is False
+                assert win_dnd.OLE2_ENV not in os.environ
+        finally:
+            os.environ.pop(win_dnd.NO_OLE2_ENV, None)
     finally:
         os.environ.pop(win_dnd.OLE2_ENV, None)
+        os.environ.pop(win_dnd.NO_OLE2_ENV, None)
 
 
 def test_com_drop_target_registered_non_windows() -> None:
@@ -2146,6 +2227,7 @@ if __name__ == "__main__":
     test_native_drop_install_and_hdrop()
     test_native_drop_libraries_use_kernel32()
     test_native_drop_opens_new_tab(test_app)
+    test_dnd_debug_log()
     test_win_dnd_mode()
     test_com_drop_target_registered_non_windows()
     test_window_geometry(test_app)

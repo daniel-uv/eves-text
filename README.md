@@ -43,7 +43,7 @@
 и установите:
 
 ```bash
-sudo dpkg -i eves-text_0.6.64-1_all.deb
+sudo dpkg -i eves-text_0.6.65-1_all.deb
 eves-text
 ```
 
@@ -52,14 +52,22 @@ eves-text
 Сборка пакета:
 
 ```bash
-./packaging/build-deb.sh        # -> dist/eves-text_0.6.64-1_all.deb
+./packaging/build-deb.sh        # -> dist/eves-text_0.6.65-1_all.deb
 ```
 
 ### Windows 11
 
-В [Windows-релизе](https://github.com/daniel-uv/eves-text/releases/tag/win-v0.6.64)
+В [Windows-релизе](https://github.com/daniel-uv/eves-text/releases/tag/win-v0.6.65)
 есть установщик `.exe` и портативный `.zip`. Рантайм (Python, GTK, словари)
 уже включён — устанавливать ничего дополнительно не нужно.
+
+Если перетаскивание файлов не работает, проверьте, что Eve's Text запущен
+**не** от имени администратора: Windows не передаёт файлы из Проводника
+процессу с повышенными правами. Диагностический лог включается пустым файлом
+`%LOCALAPPDATA%\Eve's Text\dnd-debug.flag` (после перезапуска программы);
+результат одного броска записывается в `%LOCALAPPDATA%\Eve's Text\dnd.log`.
+Для проверки запасного COM-приёмника вместо штатного OLE2 создайте в той же
+папке пустой файл `dnd-no-ole2.flag`.
 
 ## Запуск из исходников
 

@@ -158,20 +158,43 @@ def main() -> int:
     results.append(check("шрифт", font))
 
     def file_dnd():
-        """Проверить штатную регистрацию OLE2-приёмника GDK на HWND окна.
+        """Проверить регистрацию OLE2- или запасного COM-приёмника файлов.
 
-        ``drag_dest_set`` с целью ``text/uri-list`` заставляет GDK вызвать
-        ``RegisterDragDrop`` для окна. Наша попытка занять тот же HWND должна
-        получить ``DRAGDROP_E_ALREADYREGISTERED`` — это и есть доказательство,
-        что файлы из Проводника примет GDK, а не запасной COM-приёмник.
+        В обычном режиме ``drag_dest_set`` с целью ``text/uri-list`` заставляет
+        GDK вызвать ``RegisterDragDrop`` для окна. Наша попытка занять тот же
+        HWND должна получить ``DRAGDROP_E_ALREADYREGISTERED`` — это и есть
+        доказательство, что файлы из Проводника примет GDK.
+
+        Если диагностический флажок ``dnd-no-ole2.flag`` отключил GDK OLE2,
+        проверяем, что на HWND регистрируется собственный ``IDropTarget``.
         """
         from eves_text import win_com_drop, win_dnd, win_theme
 
-        if not win_dnd.use_gdk_file_drop():
-            raise RuntimeError("GDK OLE2 DnD не включён: не выставлена переменная")
-
         import ctypes
         from gi.repository import Gdk, Gtk
+
+        if win_dnd.no_ole2_requested():
+            window = Gtk.Window()
+            try:
+                window.realize()
+                gdk_window = window.get_window()
+                if gdk_window is None:
+                    raise RuntimeError("окно не получило GdkWindow")
+                hwnd = win_theme.gdk_window_handle(gdk_window)
+                if not hwnd:
+                    raise RuntimeError("не удалось получить HWND окна")
+                drop = win_com_drop.install_for_window(
+                    lambda _paths: None, gdk_window
+                )
+                if drop is None:
+                    raise RuntimeError("COM IDropTarget не зарегистрирован")
+                drop.uninstall()
+            finally:
+                window.destroy()
+            return f"запасной COM IDropTarget на HWND {hwnd:#x} (OLE2 отключён)"
+
+        if not win_dnd.use_gdk_file_drop():
+            raise RuntimeError("GDK OLE2 DnD не включён: не выставлена переменная")
 
         ole32, shell32, cf_shell, cf_file = win_com_drop._libraries()
         for library, names in (

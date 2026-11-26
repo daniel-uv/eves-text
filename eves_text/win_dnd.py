@@ -10,14 +10,42 @@
 Переменную читает ``_gdk_dnd_init()`` при открытии дисплея, причём
 проверяется только её наличие: значение ``"0"`` ничего не отключает.
 Собственный COM-приёмник (``win_com_drop``) остался запасным путём — окно
-ставит его, только если GDK почему-то не зарегистрировал свой.
+ставит его, только если GDK почему-то не зарегистрировал свой. Для
+диагностики запасной путь можно включить принудительно: см.
+``NO_OLE2_ENV``/``dnd-no-ole2.flag``.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 OLE2_ENV = "GDK_WIN32_USE_EXPERIMENTAL_OLE2_DND"
+NO_OLE2_ENV = "EVES_TEXT_DND_NO_OLE2"
+
+
+def _no_ole2_flag() -> Path | None:
+    """Файл-переключатель на запасной COM-приёмник вместо OLE2 GDK."""
+    root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    if root:
+        return Path(root) / "Eve's Text" / "dnd-no-ole2.flag"
+    try:
+        return Path.home() / "Eve's Text" / "dnd-no-ole2.flag"
+    except (OSError, RuntimeError):
+        return None
+
+
+def no_ole2_requested() -> bool:
+    """True, если диагностика просит отключить OLE2-приёмник GDK."""
+    if os.environ.get(NO_OLE2_ENV):
+        return True
+    flag = _no_ole2_flag()
+    if flag is None:
+        return False
+    try:
+        return flag.exists()
+    except OSError:
+        return False
 
 
 def is_windows() -> bool:
@@ -30,8 +58,16 @@ def configure_dnd() -> None:
 
     Вызывается при импорте пакета и ещё раз из лаунчера и проверок рантайма,
     поэтому функция идемпотентна. На других ОС ничего не делает.
+
+    Для диагностики запасного пути (собственный ``IDropTarget`` в
+    ``win_com_drop``) OLE2 можно отключить переменной ``EVES_TEXT_DND_NO_OLE2``
+    или пустым файлом ``dnd-no-ole2.flag`` в ``%LOCALAPPDATA%\\Eve's Text``.
+    Переменную нужно именно удалить: значение ``"0"`` GDK считает включением.
     """
     if not is_windows():
+        return
+    if no_ole2_requested():
+        os.environ.pop(OLE2_ENV, None)
         return
     os.environ[OLE2_ENV] = "1"
 

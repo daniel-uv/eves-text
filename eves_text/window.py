@@ -8,6 +8,7 @@ import struct
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -31,6 +32,7 @@ from gi.repository import (  # noqa: E402
 from . import (  # noqa: E402
     __version__,
     ai_check,
+    dnd_debug,
     document,
     updates,
     win_com_drop,
@@ -86,6 +88,7 @@ DND_TARGETS: tuple[tuple[str, int], ...] = (
     ("UTF8_STRING", DND_UTF8_STRING),
     ("text/plain", DND_TEXT_PLAIN),
 )
+
 
 # Класс, который ставим на кнопку вручную: в GTK3 псевдокласс :hover
 # не всегда применяется (например, в Windows-бандле), поэтому подсветку
@@ -556,6 +559,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self._com_probed = False
         self._native_drop: win_drop.NativeFileDrop | None = None
         self._recent_drops: dict[tuple[str, ...], float] = {}
+        self._dnd_motion_logged: set[tuple[int, str]] = set()
+        self._dnd_hdrop_retried: set[int] = set()
+        self._elevation_checked = False
 
         config = user_settings.load()
         saved_size = config.get("font_size")
@@ -2017,8 +2023,60 @@ class MainWindow(Gtk.ApplicationWindow):
         widget.connect("drag-motion", self._on_drag_motion)
         widget.connect("drag-drop", self._on_drag_drop)
         widget.connect("drag-data-received", self._on_drag_data)
+        widget.connect("drag-leave", self._on_drag_leave)
 
-    def _on_drag_motion(self, _widget, context, _x, _y, time) -> bool:
+    # ------------------------------------------------------ диагностика DnD
+
+    def _dnd_log(self, message: str) -> None:
+        """Записать строку в ``%LOCALAPPDATA%\\Eve's Text\\dnd.log``.
+
+        В обычном режиме не делает ничего: диагностика включается только
+        переменной ``EVES_TEXT_DND_DEBUG=1`` или файлом ``dnd-debug.flag``.
+        """
+        dnd_debug.log(message)
+
+    @staticmethod
+    def _context_target_names(context) -> list[str]:
+        """Имена целей, которые предлагает источник броска."""
+        if context is None:
+            return []
+        try:
+            return [
+                dnd_debug.atom_name(atom)
+                for atom in (context.list_targets() or [])
+            ]
+        except Exception:  # noqa: BLE001
+            return ["<error>"]
+
+    @staticmethod
+    def _widget_target_names(widget: Gtk.Widget) -> list[str]:
+        """Имена целей, которые объявил сам виджет-приёмник."""
+        try:
+            target_list = widget.drag_dest_get_target_list()
+            if target_list is None:
+                return []
+            return [
+                name
+                for name, _info in DND_TARGETS
+                if target_list.find(Gdk.atom_intern(name, False))[0]
+            ]
+        except Exception:  # noqa: BLE001
+            return ["<error>"]
+
+    def _on_drag_leave(self, widget, _context, _time) -> None:
+        self._dnd_log(f"drag-leave widget={type(widget).__name__}")
+
+    def _on_realize_dnd_debug(self, *_args) -> None:
+        if not (dnd_debug.enabled() and win_dnd.is_windows()):
+            return
+        gdk_window = self.get_window()
+        hwnd = win_theme.gdk_window_handle(gdk_window) if gdk_window else 0
+        self._dnd_log(
+            f"realize hwnd={hwnd:#x} scale={self.get_scale_factor()} "
+            f"registered={win_com_drop.target_registered(hwnd) if hwnd else False}"
+        )
+
+    def _on_drag_motion(self, widget, context, x, y, time) -> bool:
         """Принять бросок как копирование — курсор не должен быть «запрет»."""
         action = Gdk.DragAction.COPY
         if context is not None:
@@ -2032,10 +2090,24 @@ class MainWindow(Gtk.ApplicationWindow):
                     action = Gdk.DragAction.LINK
             except Exception:  # noqa: BLE001
                 pass
+        if dnd_debug.enabled():
+            key = (id(context), type(widget).__name__)
+            if key not in self._dnd_motion_logged:
+                if len(self._dnd_motion_logged) > 64:
+                    self._dnd_motion_logged.clear()
+                self._dnd_motion_logged.add(key)
+                self._dnd_log(
+                    f"drag-motion widget={type(widget).__name__} "
+                    f"pos=({x},{y}) "
+                    f"actions={int(context.get_actions()) if context else -1} "
+                    f"chosen={int(action)} "
+                    f"source_targets={self._context_target_names(context)} "
+                    f"widget_targets={self._widget_target_names(widget)}"
+                )
         Gdk.drag_status(context, action, time)
         return True
 
-    def _on_drag_drop(self, widget, context, _x, _y, time) -> bool:
+    def _on_drag_drop(self, widget, context, x, y, time) -> bool:
         """Запросить данные броска у источника.
 
         Файл с рабочего стола или из папки должен открываться и когда его
@@ -2044,29 +2116,76 @@ class MainWindow(Gtk.ApplicationWindow):
         запрашиваем именно его — иначе GtkTextView может забрать бросок
         как обычный текст и вставить путь в документ.
         """
-        uri_atom = Gdk.atom_intern(DND_TARGETS[0][0], False)
-        source_targets: list[Gdk.Atom] = []
-        if context is not None:
+        source_names = self._context_target_names(context)
+        widget_names = self._widget_target_names(widget)
+
+        # GtkTextView.set_buffer() переустанавливает список целей на
+        # paste_target_list, где нет text/uri-list. Если это случилось уже
+        # после _setup_drop_target(), gtk_drag_selection_received() молча не
+        # испустит drag-data-received. Возвращаем свои цели перед запросом.
+        if "text/uri-list" not in widget_names:
             try:
-                source_targets = list(context.list_targets())
+                target_list = Gtk.TargetList.new(
+                    [
+                        Gtk.TargetEntry.new(
+                            name, Gtk.TargetFlags(0), info
+                        )
+                        for name, info in DND_TARGETS
+                    ]
+                )
+                widget.drag_dest_set_target_list(target_list)
+                self._dnd_log(
+                    f"drag-drop restored wiped target_list on "
+                    f"{type(widget).__name__} (was {widget_names})"
+                )
             except Exception:  # noqa: BLE001
-                source_targets = []
-        target = uri_atom if uri_atom in source_targets else None
+                self._dnd_log(
+                    "EXC restoring target_list:\n" + traceback.format_exc()
+                )
+
+        # Явный приоритет: URI-список, затем CF_HDROP. Gdk.ATOM_NONE в
+        # PyGObject приходит как None, но проверяем и имя атома.
+        target = None
+        for preferred in ("text/uri-list", "CF_HDROP"):
+            if preferred in source_names:
+                target = Gdk.atom_intern(preferred, False)
+                break
+        if target is None and context is not None:
+            try:
+                found = widget.drag_dest_find_target(context, None)
+            except Exception:  # noqa: BLE001
+                found = None
+            if not dnd_debug.atom_is_none(found):
+                target = found
         if target is None:
-            target = widget.drag_dest_find_target(context, None)
-        if target is None:
-            target = uri_atom
+            target = Gdk.atom_intern("text/uri-list", False)
+
+        self._dnd_log(
+            f"drag-drop widget={type(widget).__name__} pos=({x},{y}) "
+            f"source_targets={source_names} chosen={dnd_debug.atom_name(target)!r}"
+        )
         widget.drag_get_data(context, target, time)
         return True
 
     def _connect_signals(self) -> None:
         self.connect("delete-event", self._on_delete_event)
         self.connect("map", self._on_map)
+        self.connect("realize", self._on_realize_dnd_debug)
         self.connect("configure-event", self._on_window_configure)
         self.connect("key-press-event", self._on_window_key_press)
 
         # Перетаскивание файла в окно.
         self._setup_drop_target(self)
+        if dnd_debug.enabled():
+            is_admin, integrity = dnd_debug.integrity_info()
+            self._dnd_log(
+                f"init version={__version__} "
+                f"gtk={Gtk.get_major_version()}."
+                f"{Gtk.get_minor_version()}."
+                f"{Gtk.get_micro_version()} "
+                f"ole2_env={os.environ.get(win_dnd.OLE2_ENV)!r} "
+                f"admin={is_admin} integrity={integrity}"
+            )
 
         settings = Gtk.Settings.get_default()
         if settings is not None:
@@ -3397,6 +3516,36 @@ class MainWindow(Gtk.ApplicationWindow):
             # независимых запасных пути — WM_DROPFILES и COM.
             self._install_native_file_drop()
             self._install_com_file_drop()
+        if dnd_debug.enabled():
+            GLib.idle_add(self._log_dnd_post_map)
+        if win_dnd.is_windows() and not self._elevation_checked:
+            self._elevation_checked = True
+            is_admin, integrity = dnd_debug.integrity_info()
+            if is_admin or integrity.startswith(("High", "System")):
+                self._dnd_log(f"elevated process: admin={is_admin} {integrity}")
+                GLib.idle_add(self._warn_elevated_dnd)
+
+    def _warn_elevated_dnd(self) -> bool:
+        """Объяснить, почему Проводник может не отдавать файлы такому процессу."""
+        self._show_message(
+            "Eve's Text запущен с правами администратора. Windows может не "
+            "передавать такой программе файлы из Проводника — если "
+            "перетаскивание не работает, закройте программу и запустите её "
+            "обычным способом.",
+            seconds=30,
+        )
+        return False
+
+    def _log_dnd_post_map(self) -> bool:
+        """Записать HWND и регистрацию приёмника уже после смены рамки."""
+        gdk_window = self.get_window()
+        hwnd = win_theme.gdk_window_handle(gdk_window) if gdk_window else 0
+        self._dnd_log(
+            f"post-map hwnd={hwnd:#x} scale={self.get_scale_factor()} "
+            f"registered={win_com_drop.target_registered(hwnd) if hwnd else False} "
+            f"com_drop={self._com_drop is not None}"
+        )
+        return False
 
     def _install_native_file_drop(self) -> None:
         """Включить ``DragAcceptFiles`` и перехват ``WM_DROPFILES`` в Windows."""
@@ -4297,30 +4446,109 @@ class MainWindow(Gtk.ApplicationWindow):
             return ""
 
     def _on_drag_data(self, widget, context, x, y, data, info, time) -> bool:
-        text = self._dropped_text(data, info)
-        handled = self._open_dropped_uris(text.splitlines()) if text else False
-        # CF_HDROP — это служебная структура с путями, а не текст для вставки.
-        if (
-            not handled
-            and info not in (DND_URI_LIST, DND_HDROP)
-            and isinstance(widget, Gtk.TextView)
-        ):
-            # Обычный текст, брошенный в поле ввода, вставляем как есть.
-            buffer = widget.get_buffer()
-            position = buffer.get_end_iter()
-            success, found = buffer.get_iter_at_location(x, y)
-            if success:
-                position = found
-            buffer.insert_interactive(position, text, True)
-            handled = True
-        if handled and context is not None:
-            # Встроенный обработчик GtkTextView иначе может вставить URI
-            # или текст файла прямо в редактируемый документ.
+        handled = False
+        deferred_to_hdrop = False
+        try:
+            raw = b""
             try:
-                GObject.signal_stop_emission_by_name(widget, "drag-data-received")
+                raw = bytes(data.get_data() or b"")
             except Exception:  # noqa: BLE001
                 pass
-        Gtk.drag_finish(context, handled, False, time)
+            text = self._dropped_text(data, info)
+            handled = self._open_dropped_uris(text.splitlines()) if text else False
+
+            if dnd_debug.enabled():
+                try:
+                    target_name = dnd_debug.atom_name(data.get_target())
+                    data_type_name = dnd_debug.atom_name(data.get_data_type())
+                except Exception:  # noqa: BLE001
+                    target_name = data_type_name = "?"
+                self._dnd_log(
+                    f"drag-data widget={type(widget).__name__} info={info} "
+                    f"target={target_name!r} type={data_type_name!r} "
+                    f"len={len(raw)} handled={handled} head={raw[:80]!r}"
+                )
+
+            # Если CFSTR_SHELLIDLIST → text/uri-list вернул пустоту (поиск,
+            # OneDrive, виртуальные PIDL), дозапрашиваем CF_HDROP в том же
+            # Drop, пока GDK держит IDataObject в process_pending_events().
+            if (
+                not handled
+                and info == DND_URI_LIST
+                and context is not None
+                and id(context) not in self._dnd_hdrop_retried
+                and "CF_HDROP" in self._context_target_names(context)
+                and "CF_HDROP" in self._widget_target_names(widget)
+            ):
+                self._dnd_hdrop_retried.add(id(context))
+                if len(self._dnd_hdrop_retried) > 32:
+                    self._dnd_hdrop_retried.clear()
+                    self._dnd_hdrop_retried.add(id(context))
+                self._dnd_log("drag-data empty text/uri-list -> retry CF_HDROP")
+                try:
+                    GObject.signal_stop_emission_by_name(
+                        widget, "drag-data-received"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                deferred_to_hdrop = True
+                widget.drag_get_data(
+                    context, Gdk.atom_intern("CF_HDROP", False), time
+                )
+                return True
+
+            # CF_HDROP — это служебная структура с путями, а не текст для вставки.
+            if (
+                not handled
+                and info not in (DND_URI_LIST, DND_HDROP)
+                and isinstance(widget, Gtk.TextView)
+                and text
+            ):
+                # Обычный текст, брошенный в поле ввода, вставляем как есть.
+                buffer = widget.get_buffer()
+                position = buffer.get_end_iter()
+                try:
+                    buffer_x, buffer_y = widget.window_to_buffer_coords(
+                        Gtk.TextWindowType.WIDGET, int(x), int(y)
+                    )
+                    result = widget.get_iter_at_location(buffer_x, buffer_y)
+                except Exception:  # noqa: BLE001
+                    result = None
+                if isinstance(result, tuple):
+                    success, found = result
+                    if success and found is not None:
+                        position = found
+                elif result is not None:
+                    position = result
+                buffer.insert_interactive(position, text, True)
+                handled = True
+            if context is not None and (
+                handled or info in (DND_URI_LIST, DND_HDROP)
+            ):
+                # Встроенный обработчик GtkTextView иначе может вставить URI
+                # или текст файла прямо в редактируемый документ.
+                try:
+                    GObject.signal_stop_emission_by_name(
+                        widget, "drag-data-received"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            if (
+                not handled
+                and info in (DND_URI_LIST, DND_HDROP)
+            ):
+                # Виртуальные элементы Проводника (ZIP, поиск, облачные
+                # плейсхолдеры) не имеют пути на диске.
+                self._show_message(
+                    "Этот элемент нельзя открыть напрямую — "
+                    "сначала сохраните файл на диск."
+                )
+        except Exception:  # noqa: BLE001
+            self._dnd_log("EXC in _on_drag_data:\n" + traceback.format_exc())
+            handled = False
+        finally:
+            if not deferred_to_hdrop:
+                Gtk.drag_finish(context, handled, False, time)
         # Событие не должно уйти родительскому виджету: иначе один и тот же
         # файл откроется дважды — с поля ввода и сразу с окна.
         return True
